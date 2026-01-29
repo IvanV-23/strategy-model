@@ -1,2 +1,5 @@
 .gemini
 __pycache__/
+.venv/
+
+setup.bat
