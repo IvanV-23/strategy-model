@@ -60,11 +60,15 @@ def train_agent():
     # 1. Environment
     env = gym.make("StrategyProblem-v0")
 
-    # 2. Model
-    model = StrategyActorCritic(env)
-
-    # 3. Replay Buffer
+    # 2. Replay Buffer
     replay_buffer = ReplayBuffer(BUFFER_CAPACITY, env.observation_space, env.action_space)
+
+    # 3. Model
+    model = StrategyActorCritic(
+        state_dim=replay_buffer.state_dim,
+        action_dim_diplomacy=env.action_space["diplomacy"].n,
+        action_dim_economy=env.action_space["economy"].n
+    )
 
     # 4. PyTorch Lightning Trainer setup (placeholder for MLFlow)
     # mlflow_logger = MLFlowLogger(experiment_name="StrategyProblem_RL", tracking_uri="file:./logs")
@@ -120,6 +124,11 @@ def train_agent():
 
     env.close()
     print("Training finished.")
+
+    # --- Save the trained model ---
+    model_path = "trained_model.pth"
+    torch.save(model.state_dict(), model_path)
+    print(f"Model saved to {model_path}")
 
 if __name__ == "__main__":
     train_agent()

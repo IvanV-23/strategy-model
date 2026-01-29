@@ -41,20 +41,8 @@ class Critic(nn.Module):
 
 
 class StrategyActorCritic(pl.LightningModule):
-    def __init__(self, env: gym.Env):
+    def __init__(self, state_dim: int, action_dim_diplomacy: int, action_dim_economy: int):
         super().__init__()
-        # Determine state and action dimensions from the environment
-        # Assuming observation space is a Dict of Box and Discrete
-        state_dim = 0
-        for space in env.observation_space.spaces.values():
-            if isinstance(space, gym.spaces.Box):
-                state_dim += int(np.prod(space.shape))
-            elif isinstance(space, gym.spaces.Discrete):
-                state_dim += 1 # For discrete, we'll treat it as a single feature
-
-        action_dim_diplomacy = env.action_space["diplomacy"].n
-        action_dim_economy = env.action_space["economy"].n
-
         self.actor = Actor(state_dim, action_dim_diplomacy, action_dim_economy)
         self.critic = Critic(state_dim)
 
