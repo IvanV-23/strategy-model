@@ -54,7 +54,7 @@ def train_agent():
     BATCH_SIZE = 64
     BUFFER_CAPACITY = 10000
     COLLECT_STEPS_PER_EPOCH = 200
-    TRAIN_EPOCHS = 50
+    TRAIN_EPOCHS = 1000
     LEARNING_RATE = 1e-4
 
     # 1. Environment
