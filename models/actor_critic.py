@@ -41,10 +41,11 @@ class Critic(nn.Module):
 
 
 class StrategyActorCritic(pl.LightningModule):
-    def __init__(self, state_dim: int, action_dim_diplomacy: int, action_dim_economy: int):
+    def __init__(self, state_dim: int, action_dim_diplomacy: int, action_dim_economy: int, gamma: float = 0.99):
         super().__init__()
         self.actor = Actor(state_dim, action_dim_diplomacy, action_dim_economy)
         self.critic = Critic(state_dim)
+        self.gamma = gamma
 
         self.save_hyperparameters()
 
@@ -53,34 +54,6 @@ class StrategyActorCritic(pl.LightningModule):
         state_value = self.critic(state)
         return diplomacy_logits, economy_logits, state_value
 
-    def training_step(self, batch, batch_idx):
-        # This is a placeholder for PPO training logic.
-        # In a real PPO implementation, you would calculate policy_loss and value_loss
-        # and combine them.
-        states, actions_diplomacy, actions_economy, advantages, returns = batch
-
-        # Actor loss (placeholder)
-        diplomacy_logits, economy_logits = self.actor(states)
-        
-        dist_diplomacy = torch.distributions.Categorical(logits=diplomacy_logits)
-        dist_economy = torch.distributions.Categorical(logits=economy_logits)
-
-        log_prob_diplomacy = dist_diplomacy.log_prob(actions_diplomacy)
-        log_prob_economy = dist_economy.log_prob(actions_economy)
-        
-        # This is a simplified actor loss, PPO uses ratio and clipping
-        actor_loss = -(log_prob_diplomacy * advantages).mean() - (log_prob_economy * advantages).mean()
-
-        # Critic loss (placeholder)
-        state_values = self.critic(states).squeeze(-1)
-        critic_loss = F.mse_loss(state_values, returns)
-
-        total_loss = actor_loss + 0.5 * critic_loss # Example weighting
-
-        self.log("train_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log("actor_loss", actor_loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log("critic_loss", critic_loss, on_step=True, on_epoch=True, prog_bar=True)
-        return total_loss
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
