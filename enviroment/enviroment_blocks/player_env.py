@@ -4,12 +4,18 @@ class PlayerEnv:
     def __init__(self):
         self.reset()
 
-    def reset(self, gold=100, wood=50, soldiers=5):
+    def reset(self, gold=100, wood=50, soldiers=5, gold_buildings=0):
         """Initializes player resources."""
-        # Index 0: Gold, 1: Wood, 2: Soldiers
-        self._resources = np.array([gold, wood, soldiers], dtype=np.int32)
+        # Index 0: Gold, 1: Wood, 2: Soldiers, 3: Gold Buildings
+        self._resources = np.array([gold, wood, soldiers, gold_buildings], dtype=np.int32)
         return self._resources
+    def resource_calculation(self):
+            self._resources[0] += 1 + self._resources[3] * 2  # Passive gold income each turn from gold buildings
+            self._resources[0] -= self._resources[2]*0.01
     
+            #Resource rewards
+            reward = self._resources[2]*0.1 + self._resources[0]*0.5
+            return reward
     def trade(self):
         """Performs a trade action to gain resources."""
         reward = 0.0
@@ -23,28 +29,30 @@ class PlayerEnv:
         """Performs an attack action."""
         reward = 0.0
         army_size = self._resources[2] # Index 2 is Soldiers
+        battle_victory = False
         
         #if army_size > self.opponent_strength[0]:
-        if army_size > opponent_status["soldiers"]:
+        if army_size > opponent_status["defense"]:
             # Some soldiers are lost in battle
             self._resources[2] -= np.random.randint(1, 4)
             # Success: Damage opponent
             opponent_status["soldiers"] -= self._resources[2]
 
             # Gain resources from victory
-            self._resources[0] += np.random.randint(10, 20)
-            self._resources[1] += np.random.randint(5, 15)
+            self._resources[0] += 100
+            self._resources[1] += 50
 
             # Opponent lost resources on defeat 
-            opponent_status["gold"] -= np.random.randint(10, 20)
-            opponent_status["wood"] += np.random.randint(5, 15)
-
+            opponent_status["gold"] -= 100
+            opponent_status["wood"] -= 50
+            
+            battle_victory = True
             reward += 5.0
         else:
             # Failure: Army wiped out, lose gold penalty
             self._resources[2] = 0
             reward -= 2.0
-        return reward, opponent_status
+        return reward, opponent_status, battle_victory
     
     def invest(self):
         """Invests gold to gain wood."""
@@ -66,6 +74,16 @@ class PlayerEnv:
         else:
             reward -= 0.5 # Penalty for insufficient wood
         return reward
+    def build_gold_getter(self) -> float:
+        cost_gold = 50
+        cost_wood = 20
+        if self.resources[0] >= cost_gold and self.resources[1] >= cost_wood:
+            self.resources[0] -= cost_gold
+            self.resources[1] -= cost_wood
+            self.resources[3] += 1 # Add building
+            return 10.0 # Positive reward for successful investment
+        else:
+            return -5.0 # Penalty for trying to build without resources
     @property
     def resources(self) -> np.ndarray:
         return self._resources
