@@ -49,7 +49,7 @@ class StrategyEnv(gym.Env):
         self.observation_space = spaces.Dict({
             "player_resources": spaces.Box(low=0, high=1000, shape=(4,), dtype=np.int32),
             "opponent_resources": spaces.Box(low=0, high=1000, shape=(3,), dtype=np.int32), 
-            "turn_number": spaces.Discrete(100),
+            "turn_number": spaces.Discrete(1000),
         })
 
         self.current_turn = 0
@@ -119,7 +119,7 @@ class StrategyEnv(gym.Env):
 
 
             # 1. Resource calculation 
-            reward += self.player_env.resource_calculation()
+            reward += self.player_env.resource_calculation(self.board_env.grid)
             
 
             # 2. Store Actions for Rendering
@@ -134,6 +134,7 @@ class StrategyEnv(gym.Env):
                 pass
 
             elif self.diplomacy_action == 2: # Attack (Modified for Soldiers)
+                print(f"Player attack ")
                 attack_reward, updated_opponent_status, battle_victory = self.player_env.attack(
                     opponent_status={
                         "gold": self.opponent_env.resources[0],
@@ -147,8 +148,12 @@ class StrategyEnv(gym.Env):
                 self.opponent_env.resources[1] = updated_opponent_status["wood"]
                 self.opponent_env.resources[2] = updated_opponent_status["soldiers"]
                 if battle_victory:
-                    self.board_env.claim_adjacent_tile(owner_id=1)
-
+                    print(f"Player won battle! {reward} reward.")
+                    success, base_captured = self.board_env.claim_adjacent_tile(owner_id=1)
+                    if base_captured:
+                        reward += 100.0  
+                        truncated = True # End the episode
+                        print(f"Opponent defeated! {reward} reward.")
             # 4. --- ECONOMY BRANCH ---
             if self.economy_action == 0: # Invest (Gold -> Wood)
                 reward += self.player_env.invest()
@@ -156,7 +161,7 @@ class StrategyEnv(gym.Env):
             elif self.economy_action == 1: # Create Units (Wood -> Soldiers)
                 reward += self.player_env.create_units()
                     
-            elif self.economy_action == 2: # Idle
+            elif self.economy_action == 2: # Build Gold Getter
                 reward += self.player_env.build_gold_getter()
 
             # 5. Turn and Resource Management
@@ -179,23 +184,26 @@ class StrategyEnv(gym.Env):
             self.player_env.resources[0] = updated_player_status["gold"]
             self.player_env.resources[1] = updated_player_status["wood"]
             self.player_env.resources[2] = updated_player_status["soldiers"]
-            if opp_truncated:
-                truncated = True
-                print(f"Player defeated! {reward} reward.")
+            #if opp_truncated:
+            #    truncated = True
+                
             if battle_victory:
-                self.board_env.claim_adjacent_tile(owner_id=2)
+                success, base_captured = self.board_env.claim_adjacent_tile(owner_id=2)
+                if base_captured:
+                    reward -= 100.0  
+                    truncated = True # End the episode
+                    print(f"Player defeated! {reward} reward.")
 
 
             # 8. Termination Logic
-            if self.opponent_env.resources[2] <= 0:
-                reward += 100.0 # Victory reward
-                terminated = True
-                print(f"Opponent defeated! {reward} reward.")
+            #if self.opponent_env.resources[2] <= 0:
+                #reward += 100.0 # Victory reward
+                #terminated = True
+                #print(f"Opponent defeated! {reward} reward.")
 
-            elif self.player_env.resources[0] <= 0 and self.player_env.resources[1] <= 0:
+            elif self.player_env.resources[0] <= 0:
                 # Bankrupt condition
-                reward -= self.opponent_env.resources[2] * 2
-                terminated = True
+                reward -= 100.0              
                 print(f"Player bankrupt! {reward} reward.")
 
             # 9. Rendering and Return

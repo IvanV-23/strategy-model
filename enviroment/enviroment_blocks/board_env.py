@@ -28,35 +28,43 @@ class BoardEnv:
         return board_state
 
     def claim_adjacent_tile(self, owner_id):
-            """
-            Finds tiles that are currently unowned (0) AND adjacent 
-            to a tile already owned by owner_id.
-            """
             rows, cols = self.grid.shape[0], self.grid.shape[1]
             candidate_tiles = []
+            truncated = False
+            enemy_base = (rows - 1, cols - 1) if owner_id == 1 else (0, 0)
 
-            # 1. Find all tiles currently owned by this player/opponent
-            owned_coords = np.argwhere(self.grid[:, :, 0] == owner_id)
+            # 1. Get all tiles currently owned by this player
+            owned_coords = []
+            for r in range(self.rows):
+                for c in range(self.cols):
+                    if int(self.grid[r, c, 0]) == int(owner_id):
+                        owned_coords.append((r, c))
+            #print(f"DEBUG: Player {owner_id} owns {len(owned_coords)} tiles.")
 
-            # 2. Check neighbors (Up, Down, Left, Right) for each owned tile
+            # 2. Find valid neighbors to conquer
             for r, c in owned_coords:
                 for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                     nr, nc = r + dr, c + dc
-                    
-                    # Check bounds and if the neighbor is unowned (0)
                     if 0 <= nr < rows and 0 <= nc < cols:
-                        if self.grid[nr, nc, 0] == 0:
+                        # ONLY capture if it's NOT already ours
+                        if self.grid[nr, nc, 0] != owner_id:
                             candidate_tiles.append((nr, nc))
 
-            # 3. Remove duplicates and pick one
             unique_candidates = list(set(candidate_tiles))
-
+            #print(f"DEBUG: Found {len(unique_candidates)} potential tiles to capture.") # LOG 2
+            
             if unique_candidates:
-                # Pick a random valid neighbor to expand into
+                # OPTIONAL: Instead of pure random, target the enemy base direction
+                # For now, we'll stay random but ensure the update is forced
                 idx = np.random.choice(len(unique_candidates))
                 target_r, target_c = unique_candidates[idx]
                 
-                self.grid[target_r, target_c, 0] = owner_id
-                return True
+                if (target_r, target_c) == enemy_base:
+                    truncated = True
+                
+                # FORCE UPDATE: Ensure the grid value is exactly the owner_id
+                self.grid[target_r, target_c, 0] = int(owner_id)
+                #print(f"DEBUG: Player {owner_id} captured tile at ({target_r}, {target_c})") 
+                return True, truncated
             
-            return False
+            return False, False

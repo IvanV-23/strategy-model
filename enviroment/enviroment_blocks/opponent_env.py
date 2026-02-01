@@ -3,9 +3,9 @@ import numpy as np
 class OpponentEnv:
     def __init__(self):
         # Index 0: Gold, 1: Wood, 2: Soldiers
-        self._resources = np.array([100, 50, 2], dtype=np.int32)
+        self._resources = np.array([100, 50, 0], dtype=np.int32)
     
-    def reset(self, gold=100, wood=50, soldiers=2):
+    def reset(self, gold=100, wood=50, soldiers=0):
             """Restores the opponent to starting resources."""
             # Index 0: Gold, 1: Wood, 2: Soldiers
             self._resources = np.array([gold, wood, soldiers], dtype=np.int32)
@@ -18,7 +18,7 @@ class OpponentEnv:
         battle_victory = False
 
         # Update resources
-        self._resources[0] += 5
+        self._resources[0] += 2
         self._resources[1] += 1
         self._resources[2] += 0
 
@@ -26,7 +26,7 @@ class OpponentEnv:
             # Opponent builds soldiers every 5 turns
             if self._resources[0] >= 10 and self._resources[1] >= 5:
                 self._resources[0] -= 10  # Spend gold
-                self._resources[1] -= 5   # Spend wood
+                self._resources[1] -= 10   # Spend wood
                 self._resources[2] += 2  # Gain soldiers
 
         # Ensure resources do not go negative
@@ -36,10 +36,11 @@ class OpponentEnv:
             # Opponent attacks every 10 turns
             attack_strength = self._resources[2] * (current_turn / 100) # Increasing strength over time
             if player_status["defense"] >= attack_strength:
+                 pass
                 # Successfully defend
-                player_status["soldiers"] -= attack_strength // 2 # Lose some soldiers
-                self._resources[2] -= player_status["soldiers"] // 2 # Opponent weakens
-                reward += 5.0       
+                #player_status["soldiers"] -= attack_strength // 2 # Lose some soldiers
+                #self._resources[2] -= player_status["soldiers"] 
+                #reward += 0.5       
             else:
                 if player_status["soldiers"] == 0:
                     reward -= (player_status["gold"] + player_status["wood"]) * 0.1
@@ -47,8 +48,10 @@ class OpponentEnv:
 
                     
                 # Failed to defend
-                player_status["gold"] -= 10 # Lose gold
-                player_status["wood"] -= 5  # Lose wood
+                if player_status["gold"] > 0:
+                    player_status["gold"] -= 50 # Lose gold
+                if player_status["wood"] > 0:
+                    player_status["wood"] -= 5  # Lose wood
                 player_status["soldiers"] = 0   # Lose all soldiers
                 reward -= 10.0
                 battle_victory = True

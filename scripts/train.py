@@ -143,7 +143,7 @@ def train_agent_lightning():
     # Hyperparameters
     BATCH_SIZE = 64
     BUFFER_CAPACITY = 1000
-    COLLECT_STEPS_PER_EPOCH = 200
+    COLLECT_STEPS_PER_EPOCH = 1000
     TRAIN_EPOCHS = 100
     LEARNING_RATE = 1e-4
 
@@ -167,7 +167,7 @@ def train_agent_lightning():
     early_stop_callback = EarlyStopping(
     monitor="train/reward",   # Must match exactly what you put in self.log()
     min_delta=1.0,            # Minimum improvement to be considered "better"
-    patience=20,              # How many epochs/checks to wait before giving up
+    patience=30,              # How many epochs/checks to wait before giving up
     verbose=True,
     mode="max"                # We want to MAXIMIZE reward
 )

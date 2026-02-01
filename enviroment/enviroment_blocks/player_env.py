@@ -9,20 +9,37 @@ class PlayerEnv:
         # Index 0: Gold, 1: Wood, 2: Soldiers, 3: Gold Buildings
         self._resources = np.array([gold, wood, soldiers, gold_buildings], dtype=np.int32)
         return self._resources
-    def resource_calculation(self):
-            self._resources[0] += 1 + self._resources[3] * 2  # Passive gold income each turn from gold buildings
+    def resource_calculation(self, board_grid):
+            reward = 0.0
+            # Get owned tiles
+            player_tiles_count = np.sum(board_grid[:, :, 0] == 1)
+            opponent_tiles_count = np.sum(board_grid[:, :, 0] == 2)
+
+            #Gold calculation
+            self._resources[0] += 1 
+            self._resources[0] += self._resources[3] * 2         
+            self._resources[0] += player_tiles_count * 1   
+
             self._resources[0] -= self._resources[2]*0.01
+
+            print(f"DEBUG: Player has {player_tiles_count} tiles, Opponent has {opponent_tiles_count} tiles.")
     
             #Resource rewards
-            reward = self._resources[2]*0.1 + self._resources[0]*0.5
+            
+            if opponent_tiles_count > player_tiles_count:
+                reward -= 5.0
+                return reward
+            
+            reward =  self._resources[0]*0.01 + self._resources[3]*0.1 +(player_tiles_count*2) - self._resources[1]*0.01 - (opponent_tiles_count*5)
+            
             return reward
     def trade(self):
         """Performs a trade action to gain resources."""
         reward = 0.0
-
-        self._resources[0] += np.random.randint(5, 15)
-        self._resources[1] += np.random.randint(2, 8)
-        reward += 1.0
+        if self._resources[0] >= 5:
+            self._resources[0] -= 5
+        self._resources[1] += 10
+        reward += 0.0
         return reward
     
     def attack(self, opponent_status:dict):
@@ -34,7 +51,7 @@ class PlayerEnv:
         #if army_size > self.opponent_strength[0]:
         if army_size > opponent_status["defense"]:
             # Some soldiers are lost in battle
-            self._resources[2] -= np.random.randint(1, 4)
+            #self._resources[2] -= np.random.randint(1, 4)
             # Success: Damage opponent
             opponent_status["soldiers"] -= self._resources[2]
 
@@ -45,12 +62,12 @@ class PlayerEnv:
             # Opponent lost resources on defeat 
             opponent_status["gold"] -= 100
             opponent_status["wood"] -= 50
-            
+
             battle_victory = True
-            reward += 5.0
+            reward += 10.0
         else:
             # Failure: Army wiped out, lose gold penalty
-            self._resources[2] = 0
+            self._resources[2] = self._resources[2] - 1
             reward -= 2.0
         return reward, opponent_status, battle_victory
     

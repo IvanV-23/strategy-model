@@ -57,7 +57,7 @@ class StrategyRenderer:
                     if board_data is not None:
                         tile = board_data[r][c]
                         if tile["owner"] == 1: 
-                            color = (40, 40, 80)  # Player Blue
+                            color = (0, 100, 255)  # Player Blue
                         elif tile["owner"] == 2: 
                             color = (80, 40, 40)  # Opponent Red
                         
