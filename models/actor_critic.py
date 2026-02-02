@@ -6,22 +6,23 @@ import numpy as np
 import gymnasium as gym
 
 class Actor(nn.Module):
-    def __init__(self, state_dim: int, action_dim_diplomacy: int, action_dim_economy: int):
+    def __init__(self, state_dim: int, action_dim_dip: int, action_dim_eco: int, action_dim_dist: int):
         super().__init__()
         self.backbone = nn.Sequential(
-            nn.Linear(state_dim, 128),
+            nn.Linear(state_dim, 256),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Linear(256, 128),
             nn.ReLU()
         )
-        self.diplomacy_head = nn.Linear(128, action_dim_diplomacy)
-        self.economy_head = nn.Linear(128, action_dim_economy)
+        self.diplomacy_head = nn.Linear(128, action_dim_dip)
+        self.economy_head = nn.Linear(128, action_dim_eco)
+        self.distribution_head = nn.Linear(128, action_dim_dist) 
 
-    def forward(self, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, state: torch.Tensor):
         x = self.backbone(state)
-        diplomacy_logits = self.diplomacy_head(x)
-        economy_logits = self.economy_head(x)
-        return diplomacy_logits, economy_logits
+        return (self.diplomacy_head(x), 
+                self.economy_head(x), 
+                self.distribution_head(x))
 
 class Critic(nn.Module):
     def __init__(self, state_dim: int):
@@ -41,20 +42,20 @@ class Critic(nn.Module):
 
 
 class StrategyActorCritic(pl.LightningModule):
-    def __init__(self, state_dim: int, action_dim_diplomacy: int, action_dim_economy: int, gamma: float = 0.99):
+    def __init__(self, state_dim: int, action_dim_diplomacy: int, action_dim_economy: int, action_dim_dist: int, gamma: float = 0.99):
         super().__init__()
-        self.actor = Actor(state_dim, action_dim_diplomacy, action_dim_economy)
+        # Pass the 3rd dimension to the Actor
+        self.actor = Actor(state_dim, action_dim_diplomacy, action_dim_economy, action_dim_dist)
         self.critic = Critic(state_dim)
         self.gamma = gamma
 
         self.save_hyperparameters()
 
-    def forward(self, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        diplomacy_logits, economy_logits = self.actor(state)
+    def forward(self, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        # Actor now returns 3 sets of logits
+        diplomacy_logits, economy_logits, dist_logits = self.actor(state)
         state_value = self.critic(state)
-        return diplomacy_logits, economy_logits, state_value
-
+        return diplomacy_logits, economy_logits, dist_logits, state_value
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
-        return optimizer
+        return torch.optim.Adam(self.parameters(), lr=1e-4)

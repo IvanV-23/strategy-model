@@ -51,6 +51,7 @@ class StrategyLightningModule(pl.LightningModule):
             state_dim=self.buffer.state_dim,
             action_dim_diplomacy=self.env.action_space["diplomacy"].n,
             action_dim_economy=self.env.action_space["economy"].n,
+            action_dim_dist=self.env.action_space["distribution"].n,
             gamma=self.gamma
         )
         
@@ -66,15 +67,16 @@ class StrategyLightningModule(pl.LightningModule):
         for _ in range(self.collect_steps):
             state_tensor = torch.tensor(self.buffer._flatten_observation(self.obs), dtype=torch.float32).unsqueeze(0).to(self.device)
             with torch.no_grad():
-                diplomacy_logits, economy_logits, _ = self.model(state_tensor)
+                diplomacy_logits, economy_logits, dist_logits, _ = self.model(state_tensor)
             
             prob_diplomacy = torch.distributions.Categorical(logits=diplomacy_logits)
             prob_economy = torch.distributions.Categorical(logits=economy_logits)
+            act_dist = torch.distributions.Categorical(logits=dist_logits).sample().item()
 
             action_diplomacy = prob_diplomacy.sample().item()
             action_economy = prob_economy.sample().item()
             
-            action = {"diplomacy": action_diplomacy, "economy": action_economy}
+            action = {"diplomacy": action_diplomacy, "economy": action_economy, "distribution": act_dist}
 
             next_obs, reward, terminated, truncated, _ = self.env.step(action)
             self.total_reward += reward
@@ -96,39 +98,39 @@ class StrategyLightningModule(pl.LightningModule):
                 self.episode_count += 1
 
     def training_step(self, batch, batch_idx):
-        # 1. Unpack batch
-        states, actions_dip, actions_eco, rewards, next_states, terminals, _ = batch
+            # 1. Unpack batch (NOW 8 ITEMS)
+            states, actions_dip, actions_eco, actions_dist, rewards, next_states, terminals, _ = batch
 
-        # 2. Forward pass (calling the underlying nn.Module)
-        # Note: Use self.model(...) if you wrapped your ActorCritic inside this class
-        dip_logits, eco_logits, current_values = self.model(states) 
-        current_values = current_values.squeeze(-1)
-        
-        # 3. Scale rewards & GAE logic
-        scaled_rewards = rewards / 100.0
-        with torch.no_grad():
-            _, _, next_values = self.model(next_states)
-            next_values = next_values.squeeze(-1)
-            returns = scaled_rewards + (self.gamma * next_values * (~terminals))
-            advantages = returns - current_values
+            # 2. Forward pass (NOW RETURNS 4 VALUES)
+            dip_logits, eco_logits, dist_logits, current_values = self.model(states) 
+            current_values = current_values.squeeze(-1)
+            
+            # 3. Scale rewards & GAE logic
+            scaled_rewards = rewards / 100.0
+            with torch.no_grad():
+                _, _, _, next_values = self.model(next_states) # Handle 4 returns here too
+                next_values = next_values.squeeze(-1)
+                returns = scaled_rewards + (self.gamma * next_values * (~terminals))
+                advantages = returns - current_values
 
-        # 4. Calculate Losses
-        dist_dip = torch.distributions.Categorical(logits=dip_logits)
-        dist_eco = torch.distributions.Categorical(logits=eco_logits)
-        
-        actor_loss = -(dist_dip.log_prob(actions_dip) * advantages.detach()).mean() - \
-                    (dist_eco.log_prob(actions_eco) * advantages.detach()).mean()
-        
-        critic_loss = torch.nn.functional.mse_loss(current_values, returns)
-        entropy_loss = dist_dip.entropy().mean() + dist_eco.entropy().mean()
+            # 4. Calculate Losses
+            dist_dip = torch.distributions.Categorical(logits=dip_logits)
+            dist_eco = torch.distributions.Categorical(logits=eco_logits)
+            dist_dist = torch.distributions.Categorical(logits=dist_logits) # New head
+            
+            # Add the 3rd log_prob to the actor loss
+            actor_loss = -(dist_dip.log_prob(actions_dip) * advantages.detach()).mean() - \
+                        (dist_eco.log_prob(actions_eco) * advantages.detach()).mean() - \
+                        (dist_dist.log_prob(actions_dist) * advantages.detach()).mean()
+            
+            critic_loss = torch.nn.functional.mse_loss(current_values, returns)
+            entropy_loss = dist_dip.entropy().mean() + dist_eco.entropy().mean() + dist_dist.entropy().mean()
 
-        total_loss = actor_loss + (0.5 * critic_loss) - (0.01 * entropy_loss)
+            total_loss = actor_loss + (0.5 * critic_loss) - (0.01 * entropy_loss)
 
-        # 5. LOGGING (This will now work because it's in the top-level module!)
-        self.log("train/total_loss", total_loss, prog_bar=True)
-        self.log("train/reward", rewards.mean(), prog_bar=True)
-        
-        return total_loss
+            self.log("train/total_loss", total_loss, prog_bar=True)
+            self.log("train/reward", rewards.mean(), on_step=False, on_epoch=True)
+            return total_loss
 
     def configure_optimizers(self):
         return self.model.configure_optimizers()
@@ -167,7 +169,7 @@ def train_agent_lightning():
     early_stop_callback = EarlyStopping(
     monitor="train/reward",   # Must match exactly what you put in self.log()
     min_delta=1.0,            # Minimum improvement to be considered "better"
-    patience=30,              # How many epochs/checks to wait before giving up
+    patience=20,              # How many epochs/checks to wait before giving up
     verbose=True,
     mode="max"                # We want to MAXIMIZE reward
 )
@@ -187,19 +189,24 @@ def train_agent_lightning():
     )
 
     # 5. Initial experience collection
+    # 5. Initial experience collection
     print("Starting initial experience collection...")
     obs, _ = env.reset()
-    for _ in range(BUFFER_CAPACITY // 10): # Fill 10% of buffer
+    for _ in range(BUFFER_CAPACITY // 10): 
         state_tensor = torch.tensor(replay_buffer._flatten_observation(obs), dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
-            diplomacy_logits, economy_logits, _ = lightning_module.model(state_tensor)
+            # UNPACK 4 VALUES HERE
+            dip_logits, eco_logits, dist_logits, _ = lightning_module.model(state_tensor)
         
-        prob_diplomacy = torch.distributions.Categorical(logits=diplomacy_logits)
-        prob_economy = torch.distributions.Categorical(logits=economy_logits)
+        action_diplomacy = torch.distributions.Categorical(logits=dip_logits).sample().item()
+        action_economy = torch.distributions.Categorical(logits=eco_logits).sample().item()
+        action_dist = torch.distributions.Categorical(logits=dist_logits).sample().item() # New
 
-        action_diplomacy = prob_diplomacy.sample().item()
-        action_economy = prob_economy.sample().item()
-        action = {"diplomacy": action_diplomacy, "economy": action_economy}
+        action = {
+            "diplomacy": action_diplomacy, 
+            "economy": action_economy,
+            "distribution": action_dist # Include in dict
+        }
 
         next_obs, reward, terminated, truncated, _ = env.step(action)
         

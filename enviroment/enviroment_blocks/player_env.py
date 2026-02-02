@@ -27,7 +27,7 @@ class PlayerEnv:
             #Resource rewards
             
             if opponent_tiles_count > player_tiles_count:
-                reward -= 5.0
+                reward -= 5.0 * (opponent_tiles_count - player_tiles_count)
                 return reward
             
             reward =  self._resources[0]*0.01 + self._resources[3]*0.1 +(player_tiles_count*2) - self._resources[1]*0.01 - (opponent_tiles_count*5)
@@ -43,7 +43,7 @@ class PlayerEnv:
         return reward
     
     def attack(self, opponent_status:dict):
-        """Performs an attack action."""
+        """DEPRECATED. Performs an attack action."""
         reward = 0.0
         army_size = self._resources[2] # Index 2 is Soldiers
         battle_victory = False
@@ -71,6 +71,26 @@ class PlayerEnv:
             reward -= 2.0
         return reward, opponent_status, battle_victory
     
+    def process_battle_consequences(self, victory, base_captured):
+        """Updates internal resources based on board-level battle results."""
+        reward = 0.0
+        
+        if victory:
+            # Rewards for winning a tile
+            self._resources[0] += 50  # Loot Gold
+            self._resources[1] += 25  # Loot Wood
+            reward += 10.0
+            
+            if base_captured:
+                reward += 100.0  # Massive victory bonus
+        else:
+            # Penalty for failed attack (stamina/morale loss)
+            # We subtract 1 soldier as a 'cost' of the failed attempt
+            self._resources[2] = max(0, self._resources[2] - 1)
+            reward -= 2.0
+            
+        return reward
+
     def invest(self):
         """Invests gold to gain wood."""
         reward = 0.0
@@ -98,7 +118,7 @@ class PlayerEnv:
             self.resources[0] -= cost_gold
             self.resources[1] -= cost_wood
             self.resources[3] += 1 # Add building
-            return 10.0 # Positive reward for successful investment
+            return 0.1 # Positive reward for successful investment
         else:
             return -5.0 # Penalty for trying to build without resources
     @property
