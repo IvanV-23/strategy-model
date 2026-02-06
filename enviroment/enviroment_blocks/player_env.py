@@ -35,9 +35,9 @@ class PlayerEnv:
     
             #Resource rewards
             
-            if opponent_tiles_count > player_tiles_count:
-                reward -= 0.1 * (opponent_tiles_count - player_tiles_count)
-                return reward
+            #if opponent_tiles_count > player_tiles_count:
+            #    reward -= 0.1 * (opponent_tiles_count - player_tiles_count)
+            #    return reward
             
             reward =  (self._resources[2]*0.1 + self._resources[3]*0.1) * (player_tiles_count) 
             

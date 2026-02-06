@@ -20,6 +20,8 @@ class StrategyEnv(gym.Env):
     def __init__(self, render_mode: str = None):
         super().__init__()
 
+        self.history = ["Game Started"]
+
         #Initialize enviroment blocks
         self.opponent_env = OpponentEnv()
         self.player_env = PlayerEnv()
@@ -182,7 +184,10 @@ class StrategyEnv(gym.Env):
                 # 1. Ask the board to resolve combat based on spatial soldier distribution
                 # Note: claim_adjacent_tile now handles 'Attack Power > Defense' internally
                 victory, base_captured, prev_owner, reason = self.board_env.claim_target_tile(1, (self.target_row, self.target_col))
-
+                
+                res_msg = "VICTORY" if victory else "FAILED"
+                self.history.append(f"Attack on ({self.target_row},{self.target_col}): {res_msg}") # <--- ADD THIS
+                
                 # 2. Update Player 1 resources based on result
                 attack_reward = self.player_env.process_battle_consequences(victory, base_captured, prev_owner, reason, self.board_env.get_owned_tiles(owner_id=1))
                 reward += attack_reward
@@ -192,6 +197,7 @@ class StrategyEnv(gym.Env):
                     # If P1 won, P2 loses soldiers and resources
                     self.opponent_env.resources[0] = max(0, self.opponent_env.resources[0] - 50)
                     self.opponent_env.resources[1] = max(0, self.opponent_env.resources[1] - 25)
+                    
                     # Soldiers are already handled by redistribution in the next step, 
                     # but let's reduce their pool directly for the loss:
                     #self.opponent_env.resources[2] = max(0, self.opponent_env.resources[2] - 2)
@@ -281,7 +287,8 @@ class StrategyEnv(gym.Env):
             'turn': self.current_turn,
             "board": self.board_env.get_tile_data(),
             'dip_act': getattr(self, 'last_dip_str', "None"),
-            'eco_act': getattr(self, 'last_eco_str', "None")
+            'eco_act': getattr(self, 'last_eco_str', "None"),
+            'history': self.history[-5:]  # Show last 5 actions in history
     }
 
         # Call the external renderer
