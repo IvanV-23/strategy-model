@@ -17,13 +17,14 @@ class ReplayBuffer:
         self.stats = np.zeros((capacity, 8), dtype=np.float32)
         self.next_stats = np.zeros((capacity, 8), dtype=np.float32)
 
-        # Actions
+        # --- CHANGE: Actions ---
         self.actions_diplomacy = np.zeros((capacity,), dtype=np.int64)
-        self.actions_economy = np.zeros((capacity,), dtype=np.int64)
+        # Economy now stores 2 values [soldiers, mines]
+        self.actions_economy = np.zeros((capacity, 2), dtype=np.int64) 
         self.actions_distribution = np.zeros((capacity,), dtype=np.int64)
         self.actions_target = np.zeros((capacity,), dtype=np.int64)
         
-        # Masking Feature: Store the 8x8 grid mask
+        # Masking Feature
         self.masks = np.ones((capacity, 64), dtype=np.bool_)
 
         self.rewards = np.zeros((capacity,), dtype=np.float32)
@@ -45,11 +46,11 @@ class ReplayBuffer:
         self.next_stats[self.idx] = self._extract_stats(next_state)
 
         self.actions_diplomacy[self.idx] = action["diplomacy"]
-        self.actions_economy[self.idx] = action["economy"]
+        # action["economy"] is now expected to be a list or array [sol, min]
+        self.actions_economy[self.idx] = action["economy"] 
         self.actions_distribution[self.idx] = action["distribution"]
         self.actions_target[self.idx] = action["target_tile"]
         
-        # Store mask if provided, else default to all True
         if mask is not None:
             self.masks[self.idx] = mask.flatten()
         else:
@@ -65,6 +66,7 @@ class ReplayBuffer:
     def sample(self, batch_size: int) -> Tuple:
         idxs = np.random.choice(self.size, size=batch_size, replace=False)
         
+        # Helper to convert dictionaries of numpy to dictionaries of tensors
         states = {
             "board_state": torch.from_numpy(self.board_states[idxs]),
             "player_resources": torch.from_numpy(self.stats[idxs, 0:4]),
@@ -82,14 +84,14 @@ class ReplayBuffer:
         return (
             states, 
             torch.from_numpy(self.actions_diplomacy[idxs]),
-            torch.from_numpy(self.actions_economy[idxs]),
+            torch.from_numpy(self.actions_economy[idxs]), # Returns [Batch, 2]
             torch.from_numpy(self.actions_distribution[idxs]),
             torch.from_numpy(self.actions_target[idxs]),
             torch.from_numpy(self.rewards[idxs]),
             next_states,
             torch.from_numpy(self.terminated[idxs]),
             torch.from_numpy(self.truncated[idxs]),
-            torch.from_numpy(self.masks[idxs]) # Return mask
+            torch.from_numpy(self.masks[idxs])
         )
 
     def clear(self):

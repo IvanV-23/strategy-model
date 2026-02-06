@@ -39,7 +39,7 @@ class StrategyLightningModule(pl.LightningModule):
 
         self.model = StrategyActorCritic(
             action_dim_dip=self.env.action_space["diplomacy"].n,
-            action_dim_eco=self.env.action_space["economy"].n,
+            action_dim_eco=self.env.action_space["economy"].nvec[0],
             action_dim_dist=self.env.action_space["distribution"].n,
             action_dim_target=self.env.action_space["target_tile"].n,
             board_size=64, 
@@ -83,13 +83,18 @@ class StrategyLightningModule(pl.LightningModule):
                 mask_tensor = torch.as_tensor(mask, dtype=torch.bool, device=self.device)
                 target_logits[0, ~mask_tensor] = -1e10 
 
+            sol_logits, mine_logits = eco_logits
+
             # Sample actions
             action = {
-                "diplomacy": torch.distributions.Categorical(logits=dip_logits).sample().item(),
-                "economy": torch.distributions.Categorical(logits=eco_logits).sample().item(),
-                "distribution": torch.distributions.Categorical(logits=dist_logits).sample().item(),
-                "target_tile": torch.distributions.Categorical(logits=target_logits).sample().item()
-            }
+                            "diplomacy": torch.distributions.Categorical(logits=dip_logits).sample().item(),
+                            "economy": [
+                                torch.distributions.Categorical(logits=sol_logits).sample().item(),
+                                torch.distributions.Categorical(logits=mine_logits).sample().item()
+                            ],
+                            "distribution": torch.distributions.Categorical(logits=dist_logits).sample().item(),
+                            "target_tile": torch.distributions.Categorical(logits=target_logits).sample().item()
+                        }
 
             next_obs, reward, terminated, truncated, next_info = self.env.step(action)
             self.total_reward += reward
@@ -114,76 +119,102 @@ class StrategyLightningModule(pl.LightningModule):
                 self.episode_count += 1
 
     def training_step(self, batch, batch_idx):
-            # 1. Unpack batch 
-            (states, actions_dip, actions_eco, actions_dist, 
-            actions_target, rewards, next_states, terminals, truncated, masks) = batch
+        # 1. Unpack batch 
+        (states, actions_dip, actions_eco, actions_dist, 
+            actions_target, rewards, next_states, terminals, truncated, masks) = [
+                t.squeeze(0) if isinstance(t, torch.Tensor) else t for t in batch
+            ]
 
-            # 2. Pre-process observations
-            boards, stats = self._process_obs(states)
-            next_boards, next_stats = self._process_obs(next_states)
+        # 2. Pre-process observations
+        boards, stats = self._process_obs(states)
+        next_boards, next_stats = self._process_obs(next_states)
 
-            # 3. Forward Pass
-            dip_logits, eco_logits, dist_logits, target_logits, current_values = self(boards, stats)
-            current_values = current_values.squeeze(-1)
+        # 3. Forward Pass
+        # Updated: model now returns a tuple for the economy head
+        dip_logits, (sol_logits, mine_logits), dist_logits, target_logits, current_values = self(boards, stats)
+        current_values = current_values.squeeze(-1)
 
-            # --- FEATURE: Safe Action Masking ---
-            # Ensure masks are 2D [BatchSize, 64] and use masked_fill to avoid IndexError
-            masks = masks.view(target_logits.shape).bool() 
-            target_logits = target_logits.masked_fill(~masks, -1e10)
+        # --- FEATURE: Safe Action Masking ---
+        masks = masks.view(target_logits.shape).bool() 
+        target_logits = target_logits.masked_fill(~masks, -1e10)
 
-            # 4. Calculate Target Values (Bellman Equation)
-            with torch.no_grad():
-                *_, next_values = self(next_boards, next_stats)
-                next_values = next_values.squeeze(-1)
-                # Combine terminal and truncated for the mask
-                mask_done = (~terminals).float()
-                returns = (rewards / 10.0) + (self.gamma * next_values * mask_done)
+        # 4. Calculate Target Values (Bellman Equation)
+        with torch.no_grad():
+            *_, next_values = self(next_boards, next_stats)
+            next_values = next_values.squeeze(-1)
+            mask_done = (~terminals).float()
+            returns = (rewards / 10.0) + (self.gamma * next_values * mask_done)
 
-            # 5. Advantage Calculation
-            advantages = (returns - current_values).detach()
-            # Normalize advantages for stability
-            adv = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        # 5. Advantage Calculation
+        advantages = (returns - current_values).detach()
+        adv = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-            # 6. Policy Distributions
-            dist_dip = torch.distributions.Categorical(logits=dip_logits)
-            dist_eco = torch.distributions.Categorical(logits=eco_logits)
-            dist_dist = torch.distributions.Categorical(logits=dist_logits)
-            dist_target = torch.distributions.Categorical(logits=target_logits)
+        # 6. Policy Distributions
+        dist_dip = torch.distributions.Categorical(logits=dip_logits)
+        dist_sol = torch.distributions.Categorical(logits=sol_logits)
+        dist_min = torch.distributions.Categorical(logits=mine_logits)
+        dist_dist = torch.distributions.Categorical(logits=dist_logits)
+        dist_target = torch.distributions.Categorical(logits=target_logits)
 
-            # 7. Multi-Head Actor Loss
-            loss_dip = -(dist_dip.log_prob(actions_dip) * adv).mean()
-            loss_eco = -(dist_eco.log_prob(actions_eco) * adv).mean()
-            loss_dist = -(dist_dist.log_prob(actions_dist) * adv).mean()
-            loss_target = -(dist_target.log_prob(actions_target) * adv).mean()
+        # --- 7. Multi-Head Actor Loss (FORCED FLATTENING) ---
+        
+        # Ensure actions are the correct shape [BatchSize] and type (Long)
+        # We use .reshape(-1) to guarantee a 1D tensor for log_prob
+        a_dip = actions_dip.long().reshape(-1)
+        a_dist = actions_dist.long().reshape(-1)
+        a_target = actions_target.long().reshape(-1)
+
+        # Economy: actions_eco is [BatchSize, 2]
+        # If the buffer gives [1, 2], reshape(-1) would give [2], which is WRONG.
+        # We must explicitly take the columns.
+        if actions_eco.dim() == 1: # Handle single-sample case [2] -> [1, 2]
+            actions_eco = actions_eco.unsqueeze(0)
             
-            actor_loss = loss_dip + loss_eco + loss_dist + loss_target
+        a_sol = actions_eco[:, 0].long().reshape(-1)
+        a_min = actions_eco[:, 1].long().reshape(-1)
 
-            # 8. Critic Loss (Value Function)
-            critic_loss = torch.nn.functional.mse_loss(current_values, returns)
+        # Calculate individual log probabilities
+        log_prob_dip = dist_dip.log_prob(a_dip)
+        log_prob_sol = dist_sol.log_prob(a_sol)
+        log_prob_min = dist_min.log_prob(a_min)
+        log_prob_dist = dist_dist.log_prob(a_dist)
+        log_prob_target = dist_target.log_prob(a_target)
 
-            # 9. Entropy (Encourages Exploration)
-            ent_dip = dist_dip.entropy().mean()
-            ent_eco = dist_eco.entropy().mean()
-            ent_dist = dist_dist.entropy().mean()
-            ent_target = dist_target.entropy().mean()
-            total_entropy = ent_dip + ent_eco + ent_dist + ent_target
+        # Losses
+        loss_dip = -(log_prob_dip * adv).mean()
+        loss_eco = -((log_prob_sol + log_prob_min) * adv).mean()
+        loss_dist = -(log_prob_dist * adv).mean()
+        loss_target = -(log_prob_target * adv).mean()
 
-            # 10. Total Loss
-            total_loss = actor_loss + (0.5 * critic_loss) - (0.01 * total_entropy)
+        actor_loss = loss_dip + loss_eco + loss_dist + loss_target
 
-            # --- LOGGING ---
-            self.log_dict({
-                "loss/total": total_loss,
-                "loss/actor": actor_loss,
-                "loss/critic": critic_loss,
-                "loss/head_target": loss_target,
-                "stats/entropy": total_entropy,
-                "stats/advantage_mean": advantages.mean(),
-                "stats/return_mean": returns.mean(),
-                "stats/value_mean": current_values.mean()
-            }, prog_bar=True)
+        # 8. Critic Loss
+        critic_loss = torch.nn.functional.mse_loss(current_values, returns)
 
-            return total_loss
+        # 9. Entropy
+        ent_dip = dist_dip.entropy().mean()
+        ent_sol = dist_sol.entropy().mean()
+        ent_min = dist_min.entropy().mean()
+        ent_dist = dist_dist.entropy().mean()
+        ent_target = dist_target.entropy().mean()
+        total_entropy = ent_dip + ent_sol + ent_min + ent_dist + ent_target
+
+        # 10. Total Loss
+        # loss = Actor + 0.5*Critic - 0.01*Entropy
+        total_loss = actor_loss + (0.5 * critic_loss) - (0.01 * total_entropy)
+
+        # --- LOGGING ---
+        self.log_dict({
+            "loss/total": total_loss,
+            "loss/actor": actor_loss,
+            "loss/critic": critic_loss,
+            "loss/head_eco": loss_eco,
+            "stats/entropy": total_entropy,
+            "stats/value_mean": current_values.mean(),
+            "stats/advantage_abs": adv.abs().mean()
+        }, prog_bar=True)
+
+        return total_loss
 
     def forward(self, board_state, global_stats):
         return self.model(board_state, global_stats)

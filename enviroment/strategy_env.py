@@ -35,9 +35,10 @@ class StrategyEnv(gym.Env):
 
         # Define the action space for Diplomacy and Economy
         # Diplomacy: 0: Trade, 1: Pass, 2: Attack
-        # Economy: 0: Invest in Buildings, 1: Create Units, 2: Idle
+        # Economy: [0] Soldiers to build (0-5), [1] Mines to build (0-5)
+        ## 0 means "Do nothing" for that specific unit
         self.diplomacy_action_space = spaces.Discrete(3)
-        self.economy_action_space = spaces.Discrete(3)
+        self.economy_action_space = spaces.MultiDiscrete([6, 6])
         self.distribution_action_space = spaces.Discrete(5)
         self.target_action_space = spaces.Discrete(64)  # Assuming a 8x8 board
         
@@ -86,9 +87,19 @@ class StrategyEnv(gym.Env):
             "action_mask": self.board_env.get_action_mask(player_id=1) 
         }
     def _action_extraction(self, action:dict):
+        #Diplo Head 
         self.diplomacy_action = action["diplomacy"]
-        self.economy_action = action["economy"]
+
+        #Economy Head
+        # Directly extract counts
+        # action["economy"] is now an array like [3, 0]
+        self.soldiers_to_build = action["economy"][0]
+        self.mines_to_build = action["economy"][1]
+
+        # Distribution Head
         self.distribution_action = action["distribution"]
+
+        # Target Head
         target_idx = action["target_tile"]
         self.target_row = target_idx // 8
         self.target_col = target_idx % 8
@@ -105,6 +116,16 @@ class StrategyEnv(gym.Env):
         self.eco_labels = ["Invest", "Create Units", "Idle"]
         self.last_dip_str = self.dip_labels[self.last_diplomacy_choice]
         self.last_eco_str = self.eco_labels[self.last_economy_choice]
+
+    def _store_actions_for_rendering(self, action: dict):
+        self.last_diplomacy_choice = action["diplomacy"]
+        eco_act = action["economy"]
+        
+        # Display as "Build: 2S, 1M"
+        self.last_eco_str = f"Build: {eco_act[0]}S, {eco_act[1]}M"
+        
+        self.dip_labels = ["Trade", "Pass", "Attack"]
+        self.last_dip_str = self.dip_labels[self.last_diplomacy_choice]
 
     def reset(self, seed: int = None, options: Dict = None) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
         super().reset(seed=seed)
@@ -181,15 +202,13 @@ class StrategyEnv(gym.Env):
                     print(f"Opponent defeated! Total Reward: {reward}")
 
             # 4. --- ECONOMY BRANCH ---
-            if self.economy_action == 0: # Invest (Gold -> Wood)
-                reward += self.player_env.invest()
-                    
-            elif self.economy_action == 1: # Create Units (Wood -> Soldiers)
-                reward += self.player_env.create_units()
-                reward += self.board_env.get_owned_tiles(owner_id=1)*0.2
-                    
-            elif self.economy_action == 2: # Build Gold Getter
-                reward += self.player_env.build_gold_getter()
+
+
+            eco_reward = self.player_env.process_economy(
+                num_soldiers=self.soldiers_to_build, 
+                num_mines=self.mines_to_build
+            )
+            reward += eco_reward
 
             # 5. Turn and Resource Management
             self.current_turn += 1

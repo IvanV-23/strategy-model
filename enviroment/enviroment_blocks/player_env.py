@@ -1,8 +1,14 @@
 import numpy as np
 
+
+
 class PlayerEnv:
     def __init__(self):
         self.reset()
+        self.SOLDIER_COST_GOLD = 10
+        self.SOLDIER_COST_WOOD = 5
+        self.MINE_COST_GOLD = 50
+        self.MINE_COST_WOOD = 20
 
     def reset(self, gold=100, wood=50, soldiers=5, gold_buildings=0):
         """Initializes player resources."""
@@ -33,7 +39,7 @@ class PlayerEnv:
                 reward -= 0.1 * (opponent_tiles_count - player_tiles_count)
                 return reward
             
-            reward =  self._resources[2]*0.1 + self._resources[3]*0.1 + (player_tiles_count) 
+            reward =  (self._resources[2]*0.1 + self._resources[3]*0.1) * (player_tiles_count) 
             
             return reward
     def trade(self):
@@ -44,35 +50,7 @@ class PlayerEnv:
         self._resources[1] += 10
         reward += 0.0
         return reward
-    
-    def attack(self, opponent_status:dict):
-        """DEPRECATED. Performs an attack action."""
-        reward = 0.0
-        army_size = self._resources[2] # Index 2 is Soldiers
-        battle_victory = False
-        
-        #if army_size > self.opponent_strength[0]:
-        if army_size > opponent_status["defense"]:
-            # Some soldiers are lost in battle
-            #self._resources[2] -= np.random.randint(1, 4)
-            # Success: Damage opponent
-            opponent_status["soldiers"] -= self._resources[2]
 
-            # Gain resources from victory
-            self._resources[0] += 100
-            self._resources[1] += 50
-
-            # Opponent lost resources on defeat 
-            opponent_status["gold"] -= 100
-            opponent_status["wood"] -= 50
-
-            battle_victory = True
-            reward += 10.0
-        else:
-            # Failure: Army wiped out, lose gold penalty
-            self._resources[2] = self._resources[2] - 1
-            reward -= 2.0
-        return reward, opponent_status, battle_victory
     
     def process_battle_consequences(self, victory, base_captured, previous_owner, reason, player_tiles):
             """
@@ -155,6 +133,46 @@ class PlayerEnv:
         else:
             reward -= 0.5 
             return reward # Penalty for trying to build without resources
+    
+    def process_economy(self, num_soldiers: int, num_mines: int) -> float:
+        """
+        Processes the construction of soldiers and mines based on model counts.
+        num_soldiers: Count from MultiDiscrete[0]
+        num_mines: Count from MultiDiscrete[1]
+        """
+        reward = 0.0
+        
+        # 1. Calculate Total Costs
+        total_gold_needed = (num_soldiers * self.SOLDIER_COST_GOLD) + \
+                            (num_mines * self.MINE_COST_GOLD)
+        
+        total_wood_needed = (num_soldiers * self.SOLDIER_COST_WOOD) + \
+                            (num_mines * self.MINE_COST_WOOD)
+
+        # 2. Check Affordability
+        if num_soldiers == 0 and num_mines == 0:
+            return 0.0  # Idle turn, no reward/penalty
+
+        if self._resources[0] >= total_gold_needed and self._resources[1] >= total_wood_needed:
+            # Success: Deduct and Build
+            self._resources[0] -= total_gold_needed
+            self._resources[1] -= total_wood_needed
+            
+            self._resources[2] += num_soldiers  # Index 2: Soldiers
+            self._resources[3] += num_mines     # Index 3: Gold Buildings (Mines)
+            
+            # Small positive reward for successful production
+            reward += (num_soldiers * 0.05) + (num_mines * 0.1)
+            print(f"ECONOMY: Built {num_soldiers} soldiers and {num_mines} mines.")
+            
+        else:
+            # Failure: Insufficient funds
+            # Penalty scales with how much they overspent to discourage "hallucinating" money
+            reward -= 0.5 
+            print("ECONOMY: Insufficient resources to fulfill build order!")
+            
+        return reward
+    
     @property
     def resources(self) -> np.ndarray:
         return self._resources
