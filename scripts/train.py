@@ -18,26 +18,16 @@ from models.actor_critic import StrategyActorCritic
 from data.replay_buffer import ReplayBuffer
 
 class RLDataset(IterableDataset):
-    """
-    IterableDataset for Reinforcement Learning.
-    Samples from a ReplayBuffer.
-    """
     def __init__(self, buffer: ReplayBuffer, batch_size: int):
         super().__init__()
         self.buffer = buffer
         self.batch_size = batch_size
 
     def __iter__(self) -> Iterator[Tuple]:
-        """
-        Yields a batch of experiences from the replay buffer.
-        """
         while True:
             yield self.buffer.sample(self.batch_size)
 
 class StrategyLightningModule(pl.LightningModule):
-    """
-    PyTorch Lightning module for training the StrategyActorCritic model.
-    """
     def __init__(self, env: gym.Env, buffer: ReplayBuffer, lr: float, collect_steps: int, gamma: float = 0.99, batch_size: int = 64):
         super().__init__()
         self.env = env
@@ -48,182 +38,188 @@ class StrategyLightningModule(pl.LightningModule):
         self.batch_size = batch_size
 
         self.model = StrategyActorCritic(
-            state_dim=self.buffer.state_dim,
-            action_dim_diplomacy=self.env.action_space["diplomacy"].n,
-            action_dim_economy=self.env.action_space["economy"].n,
+            action_dim_dip=self.env.action_space["diplomacy"].n,
+            action_dim_eco=self.env.action_space["economy"].n,
+            action_dim_dist=self.env.action_space["distribution"].n,
+            action_dim_target=self.env.action_space["target_tile"].n,
+            board_size=64, 
             gamma=self.gamma
         )
         
-        self.obs, _ = self.env.reset()
+        # We need info for the mask
+        self.obs, self.info = self.env.reset()
         self.total_reward = 0
         self.episode_count = 0
+        
+        self.save_hyperparameters(ignore=['env', 'buffer', 'model'])
+
+    def _process_obs(self, obs_batch):
+            # Handle single observation (from env.reset/step) vs batch (from ReplayBuffer)
+            if isinstance(obs_batch, list) and len(obs_batch) == 1:
+                obs_batch = obs_batch[0]
+
+            boards = torch.as_tensor(obs_batch["board_state"], dtype=torch.float32).view(-1, 4, 8, 8)
+            p_res = torch.as_tensor(obs_batch["player_resources"], dtype=torch.float32).view(-1, 4)
+            
+            # CHANGE THIS: .view(-1, 3) instead of (-1, 4)
+            o_res = torch.as_tensor(obs_batch["opponent_resources"], dtype=torch.float32).view(-1, 3)
+            
+            turn = torch.as_tensor(obs_batch["turn_number"], dtype=torch.float32).view(-1, 1)
+
+            # Total stats: 4 (player) + 3 (opp) + 1 (turn) = 8
+            stats = torch.cat([p_res, o_res, turn], dim=-1)
+            return boards.to(self.device), stats.to(self.device)
 
     def on_train_epoch_start(self):
-        """
-        Called at the beginning of each training epoch.
-        Collects new experience and adds it to the replay buffer.
-        """
         for _ in range(self.collect_steps):
-            state_tensor = torch.tensor(self.buffer._flatten_observation(self.obs), dtype=torch.float32).unsqueeze(0).to(self.device)
+            board_tensor, stats_tensor = self._process_obs(self.obs)
+
             with torch.no_grad():
-                diplomacy_logits, economy_logits, _ = self.model(state_tensor)
+                dip_logits, eco_logits, dist_logits, target_logits, _ = self.forward(board_tensor, stats_tensor)
             
-            prob_diplomacy = torch.distributions.Categorical(logits=diplomacy_logits)
-            prob_economy = torch.distributions.Categorical(logits=economy_logits)
+            # --- FEATURE: Apply Action Masking during collection ---
+            mask = self.info.get("action_mask", None)
+            if mask is not None:
+                mask_tensor = torch.as_tensor(mask, dtype=torch.bool, device=self.device)
+                target_logits[0, ~mask_tensor] = -1e10 
 
-            action_diplomacy = prob_diplomacy.sample().item()
-            action_economy = prob_economy.sample().item()
-            
-            action = {"diplomacy": action_diplomacy, "economy": action_economy}
+            # Sample actions
+            action = {
+                "diplomacy": torch.distributions.Categorical(logits=dip_logits).sample().item(),
+                "economy": torch.distributions.Categorical(logits=eco_logits).sample().item(),
+                "distribution": torch.distributions.Categorical(logits=dist_logits).sample().item(),
+                "target_tile": torch.distributions.Categorical(logits=target_logits).sample().item()
+            }
 
-            next_obs, reward, terminated, truncated, _ = self.env.step(action)
+            next_obs, reward, terminated, truncated, next_info = self.env.step(action)
             self.total_reward += reward
             
+            # Store experience (Ensure your buffer can store the 'mask' if you want off-policy masking)
             self.buffer.add(
                 state=self.obs,
                 action=action, 
                 reward=reward, 
                 next_state=next_obs,
                 terminated=terminated, 
-                truncated=truncated
+                truncated=truncated,
+                mask=mask # Pass mask here
             )
 
             self.obs = next_obs
+            self.info = next_info
             if terminated or truncated:
-                self.obs, _ = self.env.reset()
+                self.obs, self.info = self.env.reset()
                 self.log("episode/total_reward", self.total_reward, on_step=False, on_epoch=True)
                 self.total_reward = 0
                 self.episode_count += 1
 
     def training_step(self, batch, batch_idx):
-        # 1. Unpack batch
-        states, actions_dip, actions_eco, rewards, next_states, terminals, _ = batch
+            # 1. Unpack batch 
+            (states, actions_dip, actions_eco, actions_dist, 
+            actions_target, rewards, next_states, terminals, truncated, masks) = batch
 
-        # 2. Forward pass (calling the underlying nn.Module)
-        # Note: Use self.model(...) if you wrapped your ActorCritic inside this class
-        dip_logits, eco_logits, current_values = self.model(states) 
-        current_values = current_values.squeeze(-1)
-        
-        # 3. Scale rewards & GAE logic
-        scaled_rewards = rewards / 100.0
-        with torch.no_grad():
-            _, _, next_values = self.model(next_states)
-            next_values = next_values.squeeze(-1)
-            returns = scaled_rewards + (self.gamma * next_values * (~terminals))
-            advantages = returns - current_values
+            # 2. Pre-process observations
+            boards, stats = self._process_obs(states)
+            next_boards, next_stats = self._process_obs(next_states)
 
-        # 4. Calculate Losses
-        dist_dip = torch.distributions.Categorical(logits=dip_logits)
-        dist_eco = torch.distributions.Categorical(logits=eco_logits)
-        
-        actor_loss = -(dist_dip.log_prob(actions_dip) * advantages.detach()).mean() - \
-                    (dist_eco.log_prob(actions_eco) * advantages.detach()).mean()
-        
-        critic_loss = torch.nn.functional.mse_loss(current_values, returns)
-        entropy_loss = dist_dip.entropy().mean() + dist_eco.entropy().mean()
+            # 3. Forward Pass
+            dip_logits, eco_logits, dist_logits, target_logits, current_values = self(boards, stats)
+            current_values = current_values.squeeze(-1)
 
-        total_loss = actor_loss + (0.5 * critic_loss) - (0.01 * entropy_loss)
+            # --- FEATURE: Safe Action Masking ---
+            # Ensure masks are 2D [BatchSize, 64] and use masked_fill to avoid IndexError
+            masks = masks.view(target_logits.shape).bool() 
+            target_logits = target_logits.masked_fill(~masks, -1e10)
 
-        # 5. LOGGING (This will now work because it's in the top-level module!)
-        self.log("train/total_loss", total_loss, prog_bar=True)
-        self.log("train/reward", rewards.mean(), prog_bar=True)
-        
-        return total_loss
+            # 4. Calculate Target Values (Bellman Equation)
+            with torch.no_grad():
+                *_, next_values = self(next_boards, next_stats)
+                next_values = next_values.squeeze(-1)
+                # Combine terminal and truncated for the mask
+                mask_done = (~terminals).float()
+                returns = (rewards / 10.0) + (self.gamma * next_values * mask_done)
 
+            # 5. Advantage Calculation
+            advantages = (returns - current_values).detach()
+            # Normalize advantages for stability
+            adv = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+            # 6. Policy Distributions
+            dist_dip = torch.distributions.Categorical(logits=dip_logits)
+            dist_eco = torch.distributions.Categorical(logits=eco_logits)
+            dist_dist = torch.distributions.Categorical(logits=dist_logits)
+            dist_target = torch.distributions.Categorical(logits=target_logits)
+
+            # 7. Multi-Head Actor Loss
+            loss_dip = -(dist_dip.log_prob(actions_dip) * adv).mean()
+            loss_eco = -(dist_eco.log_prob(actions_eco) * adv).mean()
+            loss_dist = -(dist_dist.log_prob(actions_dist) * adv).mean()
+            loss_target = -(dist_target.log_prob(actions_target) * adv).mean()
+            
+            actor_loss = loss_dip + loss_eco + loss_dist + loss_target
+
+            # 8. Critic Loss (Value Function)
+            critic_loss = torch.nn.functional.mse_loss(current_values, returns)
+
+            # 9. Entropy (Encourages Exploration)
+            ent_dip = dist_dip.entropy().mean()
+            ent_eco = dist_eco.entropy().mean()
+            ent_dist = dist_dist.entropy().mean()
+            ent_target = dist_target.entropy().mean()
+            total_entropy = ent_dip + ent_eco + ent_dist + ent_target
+
+            # 10. Total Loss
+            total_loss = actor_loss + (0.5 * critic_loss) - (0.01 * total_entropy)
+
+            # --- LOGGING ---
+            self.log_dict({
+                "loss/total": total_loss,
+                "loss/actor": actor_loss,
+                "loss/critic": critic_loss,
+                "loss/head_target": loss_target,
+                "stats/entropy": total_entropy,
+                "stats/advantage_mean": advantages.mean(),
+                "stats/return_mean": returns.mean(),
+                "stats/value_mean": current_values.mean()
+            }, prog_bar=True)
+
+            return total_loss
+
+    def forward(self, board_state, global_stats):
+        return self.model(board_state, global_stats)
+    
     def configure_optimizers(self):
         return self.model.configure_optimizers()
 
     def train_dataloader(self):
-        return DataLoader(
-            RLDataset(self.buffer, self.batch_size),
-            batch_size=1, # The dataset already returns a batch
-        )
+        return DataLoader(RLDataset(self.buffer, self.batch_size), batch_size=1)
 
 def train_agent_lightning():
-    # Hyperparameters
     BATCH_SIZE = 64
-    BUFFER_CAPACITY = 1000
+    BUFFER_CAPACITY = 10000
     COLLECT_STEPS_PER_EPOCH = 1000
     TRAIN_EPOCHS = 100
     LEARNING_RATE = 1e-4
 
-    print(torch.cuda.is_available())
-
-    torch.set_float32_matmul_precision('high')
-    
-    # 1. Environment and Buffer
     env = gym.make("StrategyProblem-v0")
+    # Make sure your ReplayBuffer handles the 'mask' key in .add() and returns it in .sample()
     replay_buffer = ReplayBuffer(BUFFER_CAPACITY, env.observation_space, env.action_space)
 
-    # 2. Lightning Module
     lightning_module = StrategyLightningModule(
-        env=env,
-        buffer=replay_buffer,
-        lr=LEARNING_RATE,
-        collect_steps=COLLECT_STEPS_PER_EPOCH,
-        batch_size=BATCH_SIZE
+        env=env, buffer=replay_buffer, lr=LEARNING_RATE,
+        collect_steps=COLLECT_STEPS_PER_EPOCH, batch_size=BATCH_SIZE
     )
-    # 2.1 Early Stopping Callback
-    early_stop_callback = EarlyStopping(
-    monitor="train/reward",   # Must match exactly what you put in self.log()
-    min_delta=1.0,            # Minimum improvement to be considered "better"
-    patience=30,              # How many epochs/checks to wait before giving up
-    verbose=True,
-    mode="max"                # We want to MAXIMIZE reward
-)
-    
-    # 3. MLFlow Logger
-    mlflow_logger = MLFlowLogger(experiment_name="StrategyProblem_RL", tracking_uri="file:./ml-runs")
 
-    # 4. Trainer
     trainer = pl.Trainer(
         max_epochs=TRAIN_EPOCHS,
-        limit_train_batches=100,
-        callbacks=[early_stop_callback],
+        limit_train_batches=100, 
+        callbacks=[EarlyStopping(monitor="episode/total_reward", patience=20, mode="max")],
         gradient_clip_val=0.5,
-        logger=mlflow_logger,
-        log_every_n_steps=1,
-        enable_progress_bar=True,
+        logger=MLFlowLogger(experiment_name="Strategy_Masked", tracking_uri="file:./ml-runs"),
     )
 
-    # 5. Initial experience collection
-    print("Starting initial experience collection...")
-    obs, _ = env.reset()
-    for _ in range(BUFFER_CAPACITY // 10): # Fill 10% of buffer
-        state_tensor = torch.tensor(replay_buffer._flatten_observation(obs), dtype=torch.float32).unsqueeze(0)
-        with torch.no_grad():
-            diplomacy_logits, economy_logits, _ = lightning_module.model(state_tensor)
-        
-        prob_diplomacy = torch.distributions.Categorical(logits=diplomacy_logits)
-        prob_economy = torch.distributions.Categorical(logits=economy_logits)
-
-        action_diplomacy = prob_diplomacy.sample().item()
-        action_economy = prob_economy.sample().item()
-        action = {"diplomacy": action_diplomacy, "economy": action_economy}
-
-        next_obs, reward, terminated, truncated, _ = env.step(action)
-        
-        replay_buffer.add(
-            state=obs,
-            action=action, 
-            reward=reward, 
-            next_state=next_obs,
-            terminated=terminated, 
-            truncated=truncated
-        )
-
-        obs = next_obs
-        if terminated or truncated:
-            obs, _ = env.reset()
-    print(f"Buffer size after initial collection: {len(replay_buffer)}")
-
-    # 6. Train the model
     trainer.fit(lightning_module)
-
-    # 7. Save the model
-    model_path = "trained_model.pth"
-    torch.save(lightning_module.model.state_dict(), model_path)
-    print(f"Model saved to {model_path}")
+    torch.save(lightning_module.model.state_dict(), "trained_model.pth")
 
 if __name__ == "__main__":
     train_agent_lightning()

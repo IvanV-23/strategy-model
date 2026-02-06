@@ -8,63 +8,93 @@ class ReplayBuffer:
         self.capacity = capacity
         self.idx = 0
         self.size = 0
-
-        self.state_dim = 0
-        for space in observation_space.spaces.values():
-            if isinstance(space, gym.spaces.Box):
-                self.state_dim += int(np.prod(space.shape))
-            elif isinstance(space, gym.spaces.Discrete):
-                self.state_dim += 1
         
-        self.states = np.zeros((capacity, self.state_dim), dtype=np.float32)
-        self.actions_diplomacy = np.zeros((capacity, ), dtype=np.int64)
-        self.actions_economy = np.zeros((capacity, ), dtype=np.int64)
-        self.rewards = np.zeros((capacity, ), dtype=np.float32)
-        self.next_states = np.zeros((capacity, self.state_dim), dtype=np.float32)
-        self.terminated = np.zeros((capacity, ), dtype=np.bool_)
-        self.truncated = np.zeros((capacity, ), dtype=np.bool_)
+        # Board: (Capacity, Channels, Height, Width)
+        self.board_states = np.zeros((capacity, 4, 8, 8), dtype=np.float32)
+        self.next_board_states = np.zeros((capacity, 4, 8, 8), dtype=np.float32)
         
-        # Store the keys for consistent order when flattening
-        self._obs_keys = sorted(observation_space.spaces.keys())
+        # Stats: player(4) + opp(3) + turn(1) = 8
+        self.stats = np.zeros((capacity, 8), dtype=np.float32)
+        self.next_stats = np.zeros((capacity, 8), dtype=np.float32)
 
-    def add(self, state: Dict, action: Dict, reward: float, next_state: Dict, terminated: bool, truncated: bool):
-        flat_state = self._flatten_observation(state)
-        flat_next_state = self._flatten_observation(next_state)
+        # Actions
+        self.actions_diplomacy = np.zeros((capacity,), dtype=np.int64)
+        self.actions_economy = np.zeros((capacity,), dtype=np.int64)
+        self.actions_distribution = np.zeros((capacity,), dtype=np.int64)
+        self.actions_target = np.zeros((capacity,), dtype=np.int64)
+        
+        # Masking Feature: Store the 8x8 grid mask
+        self.masks = np.ones((capacity, 64), dtype=np.bool_)
 
-        self.states[self.idx] = flat_state
+        self.rewards = np.zeros((capacity,), dtype=np.float32)
+        self.terminated = np.zeros((capacity,), dtype=np.bool_)
+        self.truncated = np.zeros((capacity,), dtype=np.bool_)
+
+    def _extract_stats(self, obs: Dict) -> np.ndarray:
+        return np.concatenate([
+            obs["player_resources"],   
+            obs["opponent_resources"], 
+            [obs["turn_number"]]       
+        ]).astype(np.float32)
+
+    def add(self, state: Dict, action: Dict, reward: float, next_state: Dict, terminated: bool, truncated: bool, mask: np.ndarray = None):
+        self.board_states[self.idx] = state["board_state"]
+        self.next_board_states[self.idx] = next_state["board_state"]
+        
+        self.stats[self.idx] = self._extract_stats(state)
+        self.next_stats[self.idx] = self._extract_stats(next_state)
+
         self.actions_diplomacy[self.idx] = action["diplomacy"]
         self.actions_economy[self.idx] = action["economy"]
+        self.actions_distribution[self.idx] = action["distribution"]
+        self.actions_target[self.idx] = action["target_tile"]
+        
+        # Store mask if provided, else default to all True
+        if mask is not None:
+            self.masks[self.idx] = mask.flatten()
+        else:
+            self.masks[self.idx] = True
+
         self.rewards[self.idx] = reward
-        self.next_states[self.idx] = flat_next_state
         self.terminated[self.idx] = terminated
         self.truncated[self.idx] = truncated
 
         self.idx = (self.idx + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
 
-    def sample(self, batch_size: int) -> Tuple[torch.Tensor, ...]:
+    def sample(self, batch_size: int) -> Tuple:
         idxs = np.random.choice(self.size, size=batch_size, replace=False)
         
-        states = torch.tensor(self.states[idxs], dtype=torch.float32)
-        actions_diplomacy = torch.tensor(self.actions_diplomacy[idxs], dtype=torch.long)
-        actions_economy = torch.tensor(self.actions_economy[idxs], dtype=torch.long)
-        rewards = torch.tensor(self.rewards[idxs], dtype=torch.float32)
-        next_states = torch.tensor(self.next_states[idxs], dtype=torch.float32)
-        terminated = torch.tensor(self.terminated[idxs], dtype=torch.bool)
-        truncated = torch.tensor(self.truncated[idxs], dtype=torch.bool)
+        states = {
+            "board_state": torch.from_numpy(self.board_states[idxs]),
+            "player_resources": torch.from_numpy(self.stats[idxs, 0:4]),
+            "opponent_resources": torch.from_numpy(self.stats[idxs, 4:7]),
+            "turn_number": torch.from_numpy(self.stats[idxs, 7:8])
+        }
+        
+        next_states = {
+            "board_state": torch.from_numpy(self.next_board_states[idxs]),
+            "player_resources": torch.from_numpy(self.next_stats[idxs, 0:4]),
+            "opponent_resources": torch.from_numpy(self.next_stats[idxs, 4:7]),
+            "turn_number": torch.from_numpy(self.next_stats[idxs, 7:8])
+        }
 
-        return states, actions_diplomacy, actions_economy, rewards, next_states, terminated, truncated
+        return (
+            states, 
+            torch.from_numpy(self.actions_diplomacy[idxs]),
+            torch.from_numpy(self.actions_economy[idxs]),
+            torch.from_numpy(self.actions_distribution[idxs]),
+            torch.from_numpy(self.actions_target[idxs]),
+            torch.from_numpy(self.rewards[idxs]),
+            next_states,
+            torch.from_numpy(self.terminated[idxs]),
+            torch.from_numpy(self.truncated[idxs]),
+            torch.from_numpy(self.masks[idxs]) # Return mask
+        )
 
-    def _flatten_observation(self, obs: Dict) -> np.ndarray:
-        """Flattens a dictionary observation into a single numpy array."""
-        flat_obs = []
-        for key in self._obs_keys:
-            value = obs[key]
-            if isinstance(value, np.ndarray):
-                flat_obs.extend(value.flatten())
-            else: # Handles scalar values like int, float, or np.int32
-                flat_obs.append(value)
-        return np.array(flat_obs, dtype=np.float32)
+    def clear(self):
+        self.idx = 0
+        self.size = 0
 
     def __len__(self) -> int:
         return self.size

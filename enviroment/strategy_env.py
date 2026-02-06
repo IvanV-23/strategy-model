@@ -28,7 +28,7 @@ class StrategyEnv(gym.Env):
         #Initialize renderer
         # 1. Define dimensions FIRST
         self.screen_width = 800
-        self.screen_height = 600
+        self.screen_height = 1000
         self.render_mode = render_mode
         self.metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
         self.renderer = StrategyRenderer(self.screen_width, self.screen_height, self.metadata)
@@ -38,11 +38,15 @@ class StrategyEnv(gym.Env):
         # Economy: 0: Invest in Buildings, 1: Create Units, 2: Idle
         self.diplomacy_action_space = spaces.Discrete(3)
         self.economy_action_space = spaces.Discrete(3)
-
+        self.distribution_action_space = spaces.Discrete(5)
+        self.target_action_space = spaces.Discrete(64)  # Assuming a 8x8 board
+        
         # Combined action space (Tuple of discrete actions)
         self.action_space = spaces.Dict({
             "diplomacy": self.diplomacy_action_space,
             "economy": self.economy_action_space,
+            "distribution": self.distribution_action_space,
+            "target_tile": self.target_action_space,
         })
 
         # Define the observation space
@@ -50,6 +54,7 @@ class StrategyEnv(gym.Env):
             "player_resources": spaces.Box(low=0, high=1000, shape=(4,), dtype=np.int32),
             "opponent_resources": spaces.Box(low=0, high=1000, shape=(3,), dtype=np.int32), 
             "turn_number": spaces.Discrete(1000),
+            "board_state": spaces.Box(low=0, high=255, shape=(4, 8, 8), dtype=np.int32)
         })
 
         self.current_turn = 0
@@ -69,6 +74,7 @@ class StrategyEnv(gym.Env):
             "player_resources": self.player_env.resources,
             "opponent_resources": self.opponent_env.resources, # Returns the (3,) array
             "turn_number": self.current_turn,
+            "board_state": self.board_env.full_board_state(),  # Returns a (4, 8, 8) array
         }
 
     def _get_info(self) -> Dict[str, Any]:
@@ -77,10 +83,16 @@ class StrategyEnv(gym.Env):
             "player_wood": self.player_env.resources[1],
             "opponent_strength": self.opponent_env.resources[2],
             "current_turn": self.current_turn,
+            "action_mask": self.board_env.get_action_mask(player_id=1) 
         }
     def _action_extraction(self, action:dict):
         self.diplomacy_action = action["diplomacy"]
         self.economy_action = action["economy"]
+        self.distribution_action = action["distribution"]
+        target_idx = action["target_tile"]
+        self.target_row = target_idx // 8
+        self.target_col = target_idx % 8
+
         reward = 0.0
         terminated = False
         truncated = False
@@ -116,7 +128,13 @@ class StrategyEnv(gym.Env):
             
             # 0. Action Extraction
             reward,terminated, truncated = self._action_extraction(action)
+            # 0.1 Soldiers redistribution
 
+            p1_soldiers = self.player_env.resources[2] 
+            p2_soldiers = self.opponent_env.resources[2]
+
+            self.board_env.redistribute_soldiers(owner_id=1, total_soldiers=p1_soldiers, style=self.distribution_action)
+            self.board_env.redistribute_soldiers(owner_id=2, total_soldiers=p2_soldiers, style=0)
 
             # 1. Resource calculation 
             reward += self.player_env.resource_calculation(self.board_env.grid)
@@ -129,37 +147,46 @@ class StrategyEnv(gym.Env):
 
             if self.diplomacy_action == 0: # Trade
                 reward += self.player_env.trade()
+                if self.board_env.get_owned_tiles(owner_id=2) > self.board_env.get_owned_tiles(owner_id=1):
+                    reward -= 1.0 * self.board_env.get_owned_tiles(owner_id=2)
+                else:
+                    pass
+                    #reward += 0.5 * self.board_env.get_owned_tiles(owner_id=1)
 
             elif self.diplomacy_action == 1: # Pass
-                pass
-
+                reward -= self.board_env.get_owned_tiles(owner_id=2)*0.5
+            
             elif self.diplomacy_action == 2: # Attack (Modified for Soldiers)
                 print(f"Player attack ")
-                attack_reward, updated_opponent_status, battle_victory = self.player_env.attack(
-                    opponent_status={
-                        "gold": self.opponent_env.resources[0],
-                        "wood": self.opponent_env.resources[1],
-                        "soldiers": self.opponent_env.resources[2],
-                        "defense": 10 + self.opponent_env.resources[2]
-                    }
-                )
+                # 1. Ask the board to resolve combat based on spatial soldier distribution
+                # Note: claim_adjacent_tile now handles 'Attack Power > Defense' internally
+                victory, base_captured, prev_owner, reason = self.board_env.claim_target_tile(1, (self.target_row, self.target_col))
+
+                # 2. Update Player 1 resources based on result
+                attack_reward = self.player_env.process_battle_consequences(victory, base_captured, prev_owner, reason, self.board_env.get_owned_tiles(owner_id=1))
                 reward += attack_reward
-                self.opponent_env.resources[0] = updated_opponent_status["gold"]
-                self.opponent_env.resources[1] = updated_opponent_status["wood"]
-                self.opponent_env.resources[2] = updated_opponent_status["soldiers"]
-                if battle_victory:
-                    print(f"Player won battle! {reward} reward.")
-                    success, base_captured = self.board_env.claim_adjacent_tile(owner_id=1)
-                    if base_captured:
-                        reward += 100.0  
-                        truncated = True # End the episode
-                        print(f"Opponent defeated! {reward} reward.")
+
+                # 3. Update Opponent resources if they lost
+                if victory:
+                    # If P1 won, P2 loses soldiers and resources
+                    self.opponent_env.resources[0] = max(0, self.opponent_env.resources[0] - 50)
+                    self.opponent_env.resources[1] = max(0, self.opponent_env.resources[1] - 25)
+                    # Soldiers are already handled by redistribution in the next step, 
+                    # but let's reduce their pool directly for the loss:
+                    #self.opponent_env.resources[2] = max(0, self.opponent_env.resources[2] - 2)
+
+                # 4. Handle game termination
+                if base_captured:
+                    truncated = True
+                    print(f"Opponent defeated! Total Reward: {reward}")
+
             # 4. --- ECONOMY BRANCH ---
             if self.economy_action == 0: # Invest (Gold -> Wood)
                 reward += self.player_env.invest()
                     
             elif self.economy_action == 1: # Create Units (Wood -> Soldiers)
                 reward += self.player_env.create_units()
+                reward += self.board_env.get_owned_tiles(owner_id=1)*0.2
                     
             elif self.economy_action == 2: # Build Gold Getter
                 reward += self.player_env.build_gold_getter()
@@ -171,39 +198,46 @@ class StrategyEnv(gym.Env):
             reward -= self.opponent_env.score_calculation() + self.current_turn * 0.1 # Penalty for opponent strength
 
             # 7. Opponent Action
-            opp_reward, updated_player_status, opp_truncated, battle_victory = self.opponent_env.action_step(
-                current_turn=self.current_turn, 
-                player_status={
-                    "gold": self.player_env.resources[0],
-                    "wood": self.player_env.resources[1],
-                    "soldiers": self.player_env.resources[2],
-                    "defense": 10 + self.player_env.resources[2]    
-                }
-            )
-            reward += opp_reward
-            self.player_env.resources[0] = updated_player_status["gold"]
-            self.player_env.resources[1] = updated_player_status["wood"]
-            self.player_env.resources[2] = updated_player_status["soldiers"]
-            #if opp_truncated:
-            #    truncated = True
+            # First,redistribute opponent soldiers to the board so the attack power is correct
+            self.board_env.redistribute_soldiers(owner_id=2, total_soldiers=self.opponent_env.resources[2], style=0)
+
+            # Get opponent's intent
+            intent_to_attack = self.opponent_env.action_step(self.current_turn, self.board_env.get_owned_tiles(owner_id=2))
+
+            if intent_to_attack:
+                # The Board determines if the attack succeeds based on soldier proximity
+                battle_victory, base_captured, prev_owner = self.board_env.claim_adjacent_tile(owner_id=2)
                 
-            if battle_victory:
-                success, base_captured = self.board_env.claim_adjacent_tile(owner_id=2)
-                if base_captured:
-                    reward -= 100.0  
-                    truncated = True # End the episode
-                    print(f"Player defeated! {reward} reward.")
+                if battle_victory:
+                    print("Opponent captured a tile!")
+                    # P2 Gains resources for winning
+                    self.opponent_env.resources[0] += 5
+                    self.opponent_env.resources[1] += 2
+                    
+                    # P1 Loses resources for losing a tile
+                    #self.player_env.resources[0] = max(0, self.player_env.resources[0] - 50)
+                    #self.player_env.resources[1] = max(0, self.player_env.resources[1] - 25)
+          
+                    if prev_owner == 1:
+                        if self.board_env.get_owned_tiles(owner_id=2) > self.board_env.get_owned_tiles(owner_id=1):
+                            reward -= 0.02  # Penalty for losing a tile to opponent
+                    
+                    if base_captured:
+                        reward -= 100.0
+                        truncated = True
+                        print(f"Player DEFEATED at turn {self.current_turn}!")
+                else:
+                    pass
+                    # Attack failed (Opponent wasn't strong enough or no adjacent tiles)
+                    # Small penalty to opponent resources for the failed campaign
+                    #self.opponent_env.resources[2] = max(0, self.opponent_env.resources[2] - 1)
+
+            
 
 
-            # 8. Termination Logic
-            #if self.opponent_env.resources[2] <= 0:
-                #reward += 100.0 # Victory reward
-                #terminated = True
-                #print(f"Opponent defeated! {reward} reward.")
-
-            elif self.player_env.resources[0] <= 0:
+            if self.player_env.resources[0] <= 0:
                 # Bankrupt condition
-                reward -= 100.0              
+                reward -= 0.01 * self.player_env.resources[0]  # Small penalty for running out of gold        
                 print(f"Player bankrupt! {reward} reward.")
 
             # 9. Rendering and Return

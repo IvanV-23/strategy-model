@@ -3,60 +3,50 @@ import numpy as np
 class OpponentEnv:
     def __init__(self):
         # Index 0: Gold, 1: Wood, 2: Soldiers
-        self._resources = np.array([100, 50, 0], dtype=np.int32)
+        self._resources = np.array([100, 50, 10], dtype=np.int32)
     
-    def reset(self, gold=100, wood=50, soldiers=0):
+    def reset(self, gold=100, wood=50, soldiers=10):
             """Restores the opponent to starting resources."""
             # Index 0: Gold, 1: Wood, 2: Soldiers
             self._resources = np.array([gold, wood, soldiers], dtype=np.int32)
             return self.resources
 
-    def action_step(self, current_turn: int, player_status: dict):
-        """ Takes an action for the opponent. """
-        reward = 0.0
-        truncated = False
-        battle_victory = False
+    def action_step(self, current_turn: int, owned_tiles: int):
+            """ 
+            Decides opponent strategy. 
+            Returns: (intent_to_attack, updated_resources)
+            """
+            # Passive resource income
+            self._resources[0] += 1 + owned_tiles * 3
+            self._resources[1] += 1 + owned_tiles 
+            
+            # 1. Economic Logic: Build soldiers if possible every 5 turns
+            if current_turn % 1 == 0:
+                can_afford_gold = self._resources[0] // 30
+                can_afford_wood = self._resources[1] // 15
+            
+                num_to_build = int(min(can_afford_gold, can_afford_wood))
 
-        # Update resources
-        self._resources[0] += 2
-        self._resources[1] += 1
-        self._resources[2] += 0
+                if num_to_build > 0:
+                    self._resources[0] -= 30 * num_to_build
+                    self._resources[1] -= 15 * num_to_build
+                    self._resources[2] += num_to_build  # Gain a batch of soldiers
+            
+            # 2. Strategic Intent: Decide to attack every 10 turns
+            intent_to_attack = False
+            if current_turn % 5 == 0 and self._resources[2] > 0:
+                intent_to_attack = True
 
-        if current_turn % 5 == 0:
-            # Opponent builds soldiers every 5 turns
-            if self._resources[0] >= 10 and self._resources[1] >= 5:
-                self._resources[0] -= 10  # Spend gold
-                self._resources[1] -= 10   # Spend wood
-                self._resources[2] += 2  # Gain soldiers
+            if self._resources[0] > 1000:
+                 #trade
+                self._resources[0] -= 10
+                self._resources[1] += 20
 
-        # Ensure resources do not go negative
-        self._resources = np.maximum(self._resources, 0)
-
-        if current_turn % 10 == 0:
-            # Opponent attacks every 10 turns
-            attack_strength = self._resources[2] * (current_turn / 100) # Increasing strength over time
-            if player_status["defense"] >= attack_strength:
-                 pass
-                # Successfully defend
-                #player_status["soldiers"] -= attack_strength // 2 # Lose some soldiers
-                #self._resources[2] -= player_status["soldiers"] 
-                #reward += 0.5       
-            else:
-                if player_status["soldiers"] == 0:
-                    reward -= (player_status["gold"] + player_status["wood"]) * 0.1
-                    truncated = True
-
-                    
-                # Failed to defend
-                if player_status["gold"] > 0:
-                    player_status["gold"] -= 50 # Lose gold
-                if player_status["wood"] > 0:
-                    player_status["wood"] -= 5  # Lose wood
-                player_status["soldiers"] = 0   # Lose all soldiers
-                reward -= 10.0
-                battle_victory = True
-
-        return reward, player_status, truncated, battle_victory
+            # Ensure resources stay non-negative
+            self._resources = np.maximum(self._resources, 0)
+            
+            return intent_to_attack
+    
     def score_calculation(self):
             #Score based on resources
             score = self._resources[0]*0.5 + self._resources[2]*0.2
