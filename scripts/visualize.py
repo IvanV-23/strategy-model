@@ -4,87 +4,86 @@ import time
 import sys
 import os
 import pygame
-
+import numpy as np
 
 # Add the parent directory to sys.path to allow importing local modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from enviroment.strategy_env import StrategyEnv
 from models.actor_critic import StrategyActorCritic
-from data.replay_buffer import ReplayBuffer
 
 def visualize_agent():
-    """
-    Loads a trained agent and visualizes it playing in the environment.
-    """
-    # 1. Environment
+    # 1. Environment Setup
     env = gym.make("StrategyProblem-v0", render_mode="human")
 
-    # 2. Replay Buffer
-    buffer = ReplayBuffer(1, env.observation_space, env.action_space)
-
-    # 3. Model
+    # 2. Model Initialization
     model = StrategyActorCritic(
-        state_dim=buffer.state_dim,
-        action_dim_diplomacy=env.action_space["diplomacy"].n,
-        action_dim_economy=env.action_space["economy"].n,
-        action_dim_dist=env.action_space["distribution"].n
+        action_dim_dip=env.action_space["diplomacy"].n,
+        action_dim_eco=env.action_space["economy"].n,
+        action_dim_dist=env.action_space["distribution"].n,
+        action_dim_target=env.action_space["target_tile"].n,
+        board_size=64 
     )
     
+    # 3. Load Weights
     model_path = "trained_model.pth"
     if os.path.exists(model_path):
-        print(f"Loading trained model from {model_path}")
-        # Added weights_only=True to resolve the FutureWarning
-        model.load_state_dict(torch.load(model_path, weights_only=True))
+        print(f"Loading weights from {model_path}")
+        model.load_state_dict(torch.load(model_path, weights_only=True, map_location="cpu"))
     else:
-        print(f"Warning: Could not find {model_path}. Using an untrained model.")
+        print("Warning: No model found. Visualizing random agent with masking.")
     
     model.eval() 
 
-    print("Starting visualization...")
-    obs, _ = env.reset()
-    
+    # Initial reset to get first observation and info
+    obs, info = env.reset()
     running = True
+    
+    print("Starting loop. Close the Pygame window to stop.")
     while running:
+        # Prevent Pygame from hanging
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
 
-        # Convert observation to tensor
-        state_tensor = torch.tensor(buffer._flatten_observation(obs), dtype=torch.float32).unsqueeze(0)
-        
-        # Get actions from model
+        # 4. Prepare inputs
         with torch.no_grad():
-            # FIXED: Unpack 4 values instead of 3
-            diplomacy_logits, economy_logits, dist_logits, _ = model(state_tensor)
-        
-        # Create distributions for all action heads
-        prob_diplomacy = torch.distributions.Categorical(logits=diplomacy_logits)
-        prob_economy = torch.distributions.Categorical(logits=economy_logits)
-        prob_dist = torch.distributions.Categorical(logits=dist_logits)
+            # Board State: [1, 4, 8, 8]
+            board_tensor = torch.as_tensor(obs["board_state"], dtype=torch.float32).unsqueeze(0)
+            
+            # Global Stats: [1, 9] (Adjusted to match your model's expected input)
+            p_res = torch.as_tensor(obs["player_resources"], dtype=torch.float32).flatten()
+            o_res = torch.as_tensor(obs["opponent_resources"], dtype=torch.float32).flatten()
+            turn = torch.as_tensor(obs["turn_number"], dtype=torch.float32).reshape(1)
+            stats_tensor = torch.cat([p_res, o_res, turn]).unsqueeze(0)
 
-        # Sample actions
-        action_diplomacy = prob_diplomacy.sample().item()
-        action_economy = prob_economy.sample().item()
-        action_dist = prob_dist.sample().item()
+            # 5. Model Inference
+            dip_l, eco_l, dist_l, tar_l, _ = model(board_tensor, stats_tensor)
         
-        # FIXED: Include the 'distribution' key in the action dictionary
-        action = {
-            "diplomacy": action_diplomacy, 
-            "economy": action_economy,
-            "distribution": action_dist
-        }
+            # 6. Apply Action Masking
+            # We use a very large negative number so these actions aren't picked by argmax
+            mask = info.get("action_mask", None)
+            if mask is not None:
+                mask_tensor = torch.as_tensor(mask, dtype=torch.bool)
+                tar_l[0, ~mask_tensor] = -1e10  # Mask out invalid tiles
 
-        # Step the environment
-        obs, _, terminated, truncated, _ = env.step(action)
+            # 7. Action Selection (Greedy/Argmax for evaluation)
+            action = {
+                "diplomacy": torch.argmax(dip_l, dim=1).item(),
+                "economy": torch.argmax(eco_l, dim=1).item(),
+                "distribution": torch.argmax(dist_l, dim=1).item(),
+                "target_tile": torch.argmax(tar_l, dim=1).item()
+            }
+
+        # Step environment
+        obs, reward, terminated, truncated, info = env.step(action)
 
         if terminated or truncated:
-            print("Episode finished. Resetting...")
-            obs, _ = env.reset()
-            time.sleep(2) 
+            print(f"Episode Finished. Reward: {reward:.2f}. Resetting...")
+            obs, info = env.reset()
+            time.sleep(1) # Pause to let the user see the final state
             
     env.close()
-    print("Visualization finished.")
 
 if __name__ == "__main__":
     visualize_agent()

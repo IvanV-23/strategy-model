@@ -17,20 +17,23 @@ class PlayerEnv:
 
             #Gold calculation
             self._resources[0] += 1 
-            self._resources[0] += self._resources[3] * 2         
-            self._resources[0] += player_tiles_count * 1   
+            #self._resources[0] += self._resources[3] * 2         
+            self._resources[0] += player_tiles_count * 2  
 
-            self._resources[0] -= self._resources[2]*0.01
+            #self._resources[0] -= self._resources[2]*0.01
 
+            #Wood calculation
+
+            self._resources[1] += self._resources[3] * 2  
             print(f"DEBUG: Player has {player_tiles_count} tiles, Opponent has {opponent_tiles_count} tiles.")
     
             #Resource rewards
             
             if opponent_tiles_count > player_tiles_count:
-                reward -= 5.0 * (opponent_tiles_count - player_tiles_count)
+                reward -= 0.1 * (opponent_tiles_count - player_tiles_count)
                 return reward
             
-            reward =  self._resources[0]*0.01 + self._resources[3]*0.1 +(player_tiles_count*2) - self._resources[1]*0.01 - (opponent_tiles_count*5)
+            reward =  self._resources[2]*0.1 + self._resources[3]*0.1 + (player_tiles_count) 
             
             return reward
     def trade(self):
@@ -71,25 +74,54 @@ class PlayerEnv:
             reward -= 2.0
         return reward, opponent_status, battle_victory
     
-    def process_battle_consequences(self, victory, base_captured):
-        """Updates internal resources based on board-level battle results."""
-        reward = 0.0
-        
-        if victory:
-            # Rewards for winning a tile
-            self._resources[0] += 50  # Loot Gold
-            self._resources[1] += 25  # Loot Wood
-            reward += 10.0
+    def process_battle_consequences(self, victory, base_captured, previous_owner, reason, player_tiles):
+            """
+            Updates internal resources based on targeted battle results and failure reasons.
+            previous_owner: 0 for neutral, 2 for opponent (assuming current player is 1)
+            reason: "success", "out_of_bounds", "already_owned", "not_adjacent", "insufficient_force"
+            """
+            reward = 0.0
             
-            if base_captured:
-                reward += 100.0  # Massive victory bonus
-        else:
-            # Penalty for failed attack (stamina/morale loss)
-            # We subtract 1 soldier as a 'cost' of the failed attempt
-            self._resources[2] = max(0, self._resources[2] - 1)
-            reward -= 2.0
-            
-        return reward
+            if victory:
+                if previous_owner == 0:
+                    # Rewards for expanding into neutral territory
+                    self._resources[0] += 20
+                    self._resources[1] += 10
+                    reward += 0.5 * player_tiles
+                    print("Captured neutral tile.")
+                else:
+                    # Rewards for successfully raiding the opponent
+                    self._resources[0] += 60
+                    self._resources[1] += 30
+                    reward += 1.5 * player_tiles
+                    print(f"Captured enemy tile from player {previous_owner}!")
+
+                if base_captured:
+                    reward += 10.0  # Massive game-winning bonus
+                    
+            else:
+                print(f"Player attack failed! Reason: {reason}")
+                # --- Logic for handling failures based on the reason ---
+                if reason == "not_adjacent":
+                    # The agent tried to "teleport" or jump across the map
+                    reward -= 0.2
+                    
+                elif reason == "already_owned":
+                    # Waste of an action attacking its own territory
+                    reward -= 0.1
+                    
+                elif reason == "out_of_bounds":
+                    # Trying to click off the map
+                    reward -= 0.5  # Heavy penalty for invalid input logic
+                    
+                elif reason == "insufficient_force":
+                    # Valid move, just not strong enough. 
+                    # Small penalty to encourage building up power first.
+                    reward -= 0.05
+                    # You might also lose a tiny bit of power for a failed siege
+                    self._resources[2] = max(0, self._resources[2] - 1) 
+
+            return reward
 
     def invest(self):
         """Invests gold to gain wood."""
@@ -97,7 +129,7 @@ class PlayerEnv:
         if self._resources[0] >= 20:
             self._resources[0] -= 20
             self._resources[1] += 10 
-            reward += 2.0
+            reward += 0.01
         else:
             reward -= 0.5 # Penalty for insufficient funds
         return reward
@@ -107,20 +139,22 @@ class PlayerEnv:
         if self._resources[1] >= 10:
             self._resources[1] -= 10
             self._resources[2] += 5 
-            reward += 1.5
+            reward += 0.1
         else:
-            reward -= 0.5 # Penalty for insufficient wood
+            reward -= 0.1 # Penalty for insufficient wood
         return reward
     def build_gold_getter(self) -> float:
+        reward = 0.0
         cost_gold = 50
-        cost_wood = 20
+        cost_wood = 00
         if self.resources[0] >= cost_gold and self.resources[1] >= cost_wood:
             self.resources[0] -= cost_gold
             self.resources[1] -= cost_wood
             self.resources[3] += 1 # Add building
             return 0.1 # Positive reward for successful investment
         else:
-            return -5.0 # Penalty for trying to build without resources
+            reward -= 0.5 
+            return reward # Penalty for trying to build without resources
     @property
     def resources(self) -> np.ndarray:
         return self._resources

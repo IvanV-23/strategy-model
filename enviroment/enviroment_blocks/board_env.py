@@ -43,24 +43,22 @@ class BoardEnv:
             rows, cols = self.grid.shape[0], self.grid.shape[1]
             truncated = False
             enemy_base = (rows - 1, cols - 1) if int(owner_id) == 1 else (0, 0)
+            previous_owner = None  # Default if no conquest happens
 
-            # 1. Find all potential tiles to attack (neighbors of tiles we already own)
-            # We also need to track the "Attack Power" for each candidate
+            # 1. Find all potential tiles to attack
             candidate_attacks = {} # {(r, c): total_attacking_soldiers}
-
             owned_coords = np.argwhere(self.grid[:, :, 0] == owner_id)
             
             for r, c in owned_coords:
                 attacking_force = self.grid[r, c, 2]
                 for nr, nc in self._get_neighbors(r, c):
-                    # We can attack anything not already ours
                     if self.grid[nr, nc, 0] != owner_id:
                         if (nr, nc) not in candidate_attacks:
                             candidate_attacks[(nr, nc)] = 0
                         candidate_attacks[(nr, nc)] += attacking_force
 
             if not candidate_attacks:
-                return False, False
+                return False, False, None
 
             # 2. Filter candidates by battle logic
             valid_conquests = []
@@ -68,7 +66,6 @@ class BoardEnv:
                 target_owner = self.grid[tr, tc, 0]
                 target_defense = self.grid[tr, tc, 2]
 
-                # Logic: Automatic win if unowned, otherwise must exceed defense
                 if target_owner == 0 or attack_power > target_defense:
                     valid_conquests.append((tr, tc))
 
@@ -77,18 +74,19 @@ class BoardEnv:
                 idx = np.random.choice(len(valid_conquests))
                 target_r, target_c = valid_conquests[idx]
                 
+                # --- CAPTURE PREVIOUS OWNER HERE ---
+                previous_owner = int(self.grid[target_r, target_c, 0])
+                
                 if (target_r, target_c) == enemy_base:
                     truncated = True
                 
                 # Conquer the tile
                 self.grid[target_r, target_c, 0] = int(owner_id)
-                # Optional: Move some soldiers to the new tile? 
-                # For now, let's say the target defense is wiped to 0
                 self.grid[target_r, target_c, 2] = 1 
                 
-                return True, truncated
+                return True, truncated, previous_owner
             
-            return False, False
+            return False, False, None
 
     def redistribute_soldiers(self, owner_id, total_soldiers, style=0):
         """
@@ -165,7 +163,104 @@ class BoardEnv:
             for r, c in owned_indices:
                 self.grid[r, c, 2] = 1
 
+    def claim_target_tile(self, owner_id: int, target_coords: tuple) -> tuple[bool, bool, int, str]:
+        """
+        Attempts to capture a specific tile.
+        Returns: (battle_victory, base_captured, previous_owner, reason)
+        """
+        tr, tc = target_coords
+        rows, cols = self.grid.shape[0], self.grid.shape[1]
+        enemy_base = (rows - 1, cols - 1) if int(owner_id) == 1 else (0, 0)
+        
+        # 1. Out of Bounds
+        if not (0 <= tr < rows and 0 <= tc < cols):
+            return False, False, 0, "out_of_bounds"
+
+        # 2. Self-Attack
+        if self.grid[tr, tc, 0] == owner_id:
+            return False, False, 0, "already_owned"
+
+        # 3. Adjacency Check
+        is_adjacent = False
+        total_attacking_force = 0
+        
+        for nr, nc in self._get_neighbors(tr, tc):
+            if self.grid[nr, nc, 0] == owner_id:
+                is_adjacent = True
+                total_attacking_force += self.grid[nr, nc, 2]
+
+        if not is_adjacent:
+            return False, False, 0, "not_adjacent"
+
+        # 4. Battle Logic
+        target_owner = int(self.grid[tr, tc, 0])
+        target_defense = self.grid[tr, tc, 2]
+        previous_owner = target_owner
+
+        if target_owner == 0 or total_attacking_force > target_defense:
+            base_captured = (tr, tc) == enemy_base
+            self.grid[tr, tc, 0] = int(owner_id)
+            self.grid[tr, tc, 2] = 1 
+            return True, base_captured, previous_owner, "success"
+        
+        # 5. Failed Battle
+        return False, False, previous_owner, "insufficient_force"
+
     def get_owned_tiles(self, owner_id):
             return np.sum(self.grid[:, :, 0] == owner_id)
     def get_tile_ownership(self):
             return self.grid[:, :, 0]
+    
+    def full_board_state(self) -> np.ndarray:
+            """
+            Returns a 4-channel representation of the board:
+            0: Owner ID
+            1: Status (Buildings)
+            2: Soldiers
+            3: Adjacency Mask (1.0 if adjacent to Player 1 territory and not owned by P1)
+            """
+            # Current grid is (8, 8, 3) -> [Owner, Status, Soldiers]
+            # Let's create the 4th channel: Adjacency Mask
+            rows, cols = self.grid.shape[0], self.grid.shape[1]
+            mask = np.zeros((rows, cols), dtype=np.int32)
+            
+            owner_channel = self.grid[:, :, 0]
+            player_tiles = np.argwhere(owner_channel == 1)
+            
+            for r, c in player_tiles:
+                for nr, nc in self._get_neighbors(r, c):
+                    # If neighbor is not already owned by Player 1
+                    if owner_channel[nr, nc] != 1:
+                        mask[nr, nc] = 1
+
+            # Combine the original 3 channels with the new mask
+            # We use axis=2 because the original grid is (8, 8, 3)
+            combined = np.concatenate([self.grid, mask[..., np.newaxis]], axis=2)
+            
+            # Transpose from (Rows, Cols, Channels) to (Channels, Rows, Cols)
+            # This makes it (4, 8, 8)
+            return combined.transpose(2, 0, 1).astype(np.int32)
+
+
+    def get_action_mask(self, player_id):
+        """
+        Returns a 1D boolean array of size 64.
+        True = Valid target for attack.
+        False = Invalid target (already owned or not reachable).
+        """
+        # 1. Initialize a flat mask of 64 zeros (8x8)
+        mask = np.zeros(self.rows * self.cols, dtype=bool)
+        
+        # 2. Find all tiles owned by the player
+        owned_coords = np.argwhere(self.grid[:, :, 0] == player_id)
+        
+        # 3. For every owned tile, check its neighbors
+        for r, c in owned_coords:
+            for nr, nc in self._get_neighbors(r, c):
+                # A neighbor is a valid target if NOT owned by the current player
+                if self.grid[nr, nc, 0] != player_id:
+                    # Convert 2D (nr, nc) to 1D index
+                    flat_idx = nr * self.cols + nc
+                    mask[flat_idx] = True
+                    
+        return mask
