@@ -8,27 +8,54 @@ class BoardEnv:
         # Index 0: Owner (0=None, 1=P1, 2=P2)
         # Index 1: Status (e.g., 1=Building/Base)
         # Index 2: Soldiers (number of units on this specific tile)
-        self.grid = np.zeros((rows, cols, 3), dtype=np.int32)
+        # Index 3: Resource Value (The static value of the tile)
+        self.grid = np.zeros((rows, cols, 4), dtype=np.int32)
 
     def reset(self):
-        self.grid = np.zeros((self.rows, self.cols, 3), dtype=np.int32)
-        # Optional: Set starting positions
-        self.grid[0, 0] = [1, 1, 10]  # Player starts at top-left with 10 soldiers
-        self.grid[self.rows-1, self.cols-1] = [2, 1, 10] # Opponent at bottom-right
-        return self.grid
+            # Reset everything BUT resources if you want the map to stay the same, 
+            # or call _generate_resources() again for a brand new map.
+            resource_layer = self.grid[:, :, 3].copy() 
+            self.grid = np.zeros((self.rows, self.cols, 4), dtype=np.int32)
+            self.grid[:, :, 3] = resource_layer
+            
+            # Set starting positions
+            self.grid[0, 0, :3] = [1, 1, 10]
+            self.grid[self.rows-1, self.cols-1, :3] = [2, 1, 10]
+            #Generate new resources
+            self._generate_resources()
+
+            return self.grid
 
     def get_tile_data(self):
-            board_state = []
+        """
+        Converts the internal numpy grid into a format the renderer understands.
+        grid[:,:,0] = Owner
+        grid[:,:,1] = Status (Building Type 0-5)
+        grid[:,:,2] = Soldiers
+        grid[:,:,3] = Wood Resources
+        """
+        tile_data = []
+        for r in range(self.rows):
+            row_list = []
+            for c in range(self.cols):
+                row_list.append({
+                    "owner": int(self.grid[r, c, 0]),
+                    "status": int(self.grid[r, c, 1]), # This is the Mine level!
+                    "soldiers": int(self.grid[r, c, 2]),
+                    "wood": int(self.grid[r, c, 3])
+                })
+            tile_data.append(row_list)
+        return tile_data
+
+    def _generate_resources(self):
+            """Randomly distributes resource values across the board at initialization."""
+            # Example: 20% of tiles have high resources (5-10), others have 1
             for r in range(self.rows):
-                row_data = []
                 for c in range(self.cols):
-                    row_data.append({
-                        "owner": int(self.grid[r, c, 0]),
-                        "status": int(self.grid[r, c, 1]),
-                        "soldiers": int(self.grid[r, c, 2])
-                    })
-                board_state.append(row_data)
-            return board_state
+                    if np.random.random() > 0.8:
+                        self.grid[r, c, 3] = np.random.randint(5, 11)
+                    else:
+                        self.grid[r, c, 3] = 0
 
     def _get_neighbors(self, r, c):
             """Helper to get valid adjacent coordinates"""
@@ -58,7 +85,7 @@ class BoardEnv:
                         candidate_attacks[(nr, nc)] += attacking_force
 
             if not candidate_attacks:
-                return False, False, None
+                return False, False, None, attacking_force
 
             # 2. Filter candidates by battle logic
             valid_conquests = []
@@ -84,9 +111,9 @@ class BoardEnv:
                 self.grid[target_r, target_c, 0] = int(owner_id)
                 self.grid[target_r, target_c, 2] = 1 
                 
-                return True, truncated, previous_owner
+                return True, truncated, previous_owner, attack_power
             
-            return False, False, None
+            return False, False, None, attacking_force
 
     def redistribute_soldiers(self, owner_id, total_soldiers, style=0):
         """
@@ -163,48 +190,58 @@ class BoardEnv:
             for r, c in owned_indices:
                 self.grid[r, c, 2] = 1
 
-    def claim_target_tile(self, owner_id: int, target_coords: tuple) -> tuple[bool, bool, int, str]:
-        """
-        Attempts to capture a specific tile.
-        Returns: (battle_victory, base_captured, previous_owner, reason)
-        """
-        tr, tc = target_coords
-        rows, cols = self.grid.shape[0], self.grid.shape[1]
-        enemy_base = (rows - 1, cols - 1) if int(owner_id) == 1 else (0, 0)
-        
-        # 1. Out of Bounds
-        if not (0 <= tr < rows and 0 <= tc < cols):
-            return False, False, 0, "out_of_bounds"
+    def claim_target_tile(self, owner_id: int, target_coords: tuple) -> tuple[bool, bool, int, str, int]:
+                tr, tc = target_coords
+                rows, cols = self.grid.shape[0], self.grid.shape[1]
+                
+                # Define base locations
+                p1_base = (0, 0)
+                p2_base = (rows - 1, cols - 1)
+                enemy_base = p2_base if int(owner_id) == 1 else p1_base
+                
+                # 1. Validation Checks
+                if not (0 <= tr < rows and 0 <= tc < cols):
+                    return False, False, 0, "out_of_bounds", 0
+                if self.grid[tr, tc, 0] == owner_id:
+                    return False, False, 0, "already_owned", 0
 
-        # 2. Self-Attack
-        if self.grid[tr, tc, 0] == owner_id:
-            return False, False, 0, "already_owned"
+                # 2. Adjacency & Attacking Force Calculation
+                is_adjacent = False
+                total_attacking_force = 0
+                for nr, nc in self._get_neighbors(tr, tc):
+                    if self.grid[nr, nc, 0] == owner_id:
+                        is_adjacent = True
+                        total_attacking_force += self.grid[nr, nc, 2]
 
-        # 3. Adjacency Check
-        is_adjacent = False
-        total_attacking_force = 0
-        
-        for nr, nc in self._get_neighbors(tr, tc):
-            if self.grid[nr, nc, 0] == owner_id:
-                is_adjacent = True
-                total_attacking_force += self.grid[nr, nc, 2]
+                if not is_adjacent:
+                    return False, False, 0, "not_adjacent", 0
 
-        if not is_adjacent:
-            return False, False, 0, "not_adjacent"
+                # 3. Defense Logic
+                target_owner = int(self.grid[tr, tc, 0])
+                # We track the actual soldiers on the tile for the "defeated" count
+                actual_soldiers = int(self.grid[tr, tc, 2])
+                target_defense = actual_soldiers
+                
+                # Apply mechanical bonus for bases
+                if (tr, tc) == p1_base or (tr, tc) == p2_base:
+                    target_defense += 50
 
-        # 4. Battle Logic
-        target_owner = int(self.grid[tr, tc, 0])
-        target_defense = self.grid[tr, tc, 2]
-        previous_owner = target_owner
-
-        if target_owner == 0 or total_attacking_force > target_defense:
-            base_captured = (tr, tc) == enemy_base
-            self.grid[tr, tc, 0] = int(owner_id)
-            self.grid[tr, tc, 2] = 1 
-            return True, base_captured, previous_owner, "success"
-        
-        # 5. Failed Battle
-        return False, False, previous_owner, "insufficient_force"
+                # 4. Battle Logic
+                if target_owner == 0 or total_attacking_force > target_defense:
+                    base_captured = (tr, tc) == enemy_base
+                    
+                    # The "defeated" count is the number of soldiers that were there
+                    # If target_owner was 0, actual_soldiers is likely 0 anyway.
+                    defeated_count = actual_soldiers
+                    
+                    # Update Grid
+                    self.grid[tr, tc, 0] = int(owner_id)
+                    self.grid[tr, tc, 2] = 1 # Occupy with 1 soldier
+                    
+                    return True, base_captured, target_owner, "success", defeated_count
+                
+                # If the attack fails, 0 enemy soldiers were removed from the board
+                return False, False, target_owner, "insufficient_force", 0
 
     def get_owned_tiles(self, owner_id):
             return np.sum(self.grid[:, :, 0] == owner_id)
@@ -213,35 +250,57 @@ class BoardEnv:
     
     def full_board_state(self) -> np.ndarray:
             """
-            Returns a 4-channel representation of the board:
+            Returns a 5-channel representation of the board:
             0: Owner ID
             1: Status (Buildings)
             2: Soldiers
-            3: Adjacency Mask (1.0 if adjacent to Player 1 territory and not owned by P1)
+            3: Adjacency Mask (Maintained at index 3 for script compatibility)
+            4: Resources (Added at the end)
             """
-            # Current grid is (8, 8, 3) -> [Owner, Status, Soldiers]
-            # Let's create the 4th channel: Adjacency Mask
             rows, cols = self.grid.shape[0], self.grid.shape[1]
-            mask = np.zeros((rows, cols), dtype=np.int32)
             
+            # 1. Generate the Adjacency Mask
+            mask = np.zeros((rows, cols), dtype=np.int32)
             owner_channel = self.grid[:, :, 0]
             player_tiles = np.argwhere(owner_channel == 1)
             
             for r, c in player_tiles:
                 for nr, nc in self._get_neighbors(r, c):
-                    # If neighbor is not already owned by Player 1
                     if owner_channel[nr, nc] != 1:
                         mask[nr, nc] = 1
 
-            # Combine the original 3 channels with the new mask
-            # We use axis=2 because the original grid is (8, 8, 3)
-            combined = np.concatenate([self.grid, mask[..., np.newaxis]], axis=2)
+            # 2. Extract layers from self.grid (which is [Owner, Status, Soldiers, Resources])
+            core_layers = self.grid[:, :, :3]  # Owner, Status, Soldiers
+            resource_layer = self.grid[:, :, 3:] # Resources
             
-            # Transpose from (Rows, Cols, Channels) to (Channels, Rows, Cols)
-            # This makes it (4, 8, 8)
+            # 3. Reconstruct with Mask at Index 3
+            # Resulting order: [Owner(0), Status(1), Soldiers(2), Mask(3), Resources(4)]
+            combined = np.concatenate([
+                core_layers, 
+                mask[..., np.newaxis], 
+                resource_layer
+            ], axis=2)
+            
+            # 4. Transpose to (5, 8, 8)
             return combined.transpose(2, 0, 1).astype(np.int32)
 
-
+    def get_board_state_and_stats(self):
+        # The spatial board as you already have it (5, 8, 8)
+        spatial_board = self.full_board_state() 
+        
+        # The global stats vector (Scalable!)
+        global_stats = np.array([
+            self.get_resource_tile_count(player_id=1),
+            self.get_mine_count(player_id=1),
+            # Future-proofing: add more here easily
+            # self.get_gold_balance(player_id),
+            # self.get_tech_level(player_id),
+        ], dtype=np.float32)
+        
+        return {
+            "visual": spatial_board,
+            "stats": global_stats
+        }
     def get_action_mask(self, player_id):
         """
         Returns a 1D boolean array of size 64.
@@ -264,3 +323,112 @@ class BoardEnv:
                     mask[flat_idx] = True
                     
         return mask
+
+    def get_build_mask(self, player_id: int, player_gold: int, player_wood: int) -> np.ndarray:
+        """
+        Returns a mask of size 6 for economy/building types.
+        Checks:
+        1. "Do Nothing" is always available.
+        2. Capacity: Mines owned < Resource tiles owned.
+        3. Space: Is there at least one empty owned tile?
+        4. Costs: Does the player have enough Gold/Wood?
+        """
+        # Start with all False, but index 0 (Do Nothing) is always True
+        mask = np.zeros(6, dtype=bool)
+        mask[0] = True 
+
+        # 1. Capacity Check: If we reached the mine limit, return early (only index 0 remains True)
+        current_mines = self.get_mine_count(player_id)
+        resource_tiles = self.get_resource_tile_count(player_id)
+        if current_mines >= resource_tiles:
+            return mask
+
+        # 2. Physical Space Check: Do we actually have a tile to put a mine on?
+        # Grid structure assumes layer 0 is owner and layer 1 is building (0 for none)
+        has_space = np.any((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] == 0))
+        if not has_space:
+            return mask
+
+        # 3. Cost Check: Evaluate each mine type (1-5)
+        costs = [
+            (0, 0),     # Type 0: Do Nothing
+            (50, 0),    # Type 1: Basic Mine
+            (100, 0),  # Type 2: Advanced Mine
+            (150, 0),  # Type 3: Industrial Mine
+            (200, 0),  # Type 4: Mega Mine
+            (250, 0)  # Type 5: Extraction Hub
+        ]
+
+        for i in range(1, len(costs)): # Skip index 0 as it's already True
+            gold_cost, wood_cost = costs[i]
+            if player_gold >= gold_cost and player_wood >= wood_cost:
+                mask[i] = True
+                
+        return mask
+
+    def collect_income(self, player_id):
+        """
+        Calculates and returns the total resources owned by a player.
+        Call this at the start of every turn.
+        """
+        # Find tiles where Index 0 matches player_id
+        owned_mask = (self.grid[:, :, 0] == player_id)
+        # Sum the resource values (Index 3) of those tiles
+        total_income = np.sum(self.grid[owned_mask, 3])
+        return total_income
+
+#------ Additional methods for resource management, posibly a new class in the future ------
+
+    def get_resource_tile_count(self, player_id):
+            """
+            Returns the number of tiles owned by the player that have 
+            actual resource value (wood > 0).
+            """
+            owned_mask = (self.grid[:, :, 0] == player_id)
+            has_resource_mask = (self.grid[:, :, 3] > 0)
+            
+            # Combine masks: Owned AND has resources
+            resource_tiles = np.logical_and(owned_mask, has_resource_mask)
+            return np.sum(resource_tiles)
+
+    def get_mine_count(self, player_id):
+        """
+        Returns the number of Mines (Status 2) currently owned by the player.
+        """
+        owned_mask = (self.grid[:, :, 0] == player_id)
+        is_mine_mask = (self.grid[:, :, 1] == 2) # Assuming 2 is the status for Mine
+        
+        player_mines = np.logical_and(owned_mask, is_mine_mask)
+        return np.sum(player_mines)
+
+    def build_mine(self, player_id, mine_type):
+        """
+        Attempts to build a specific mine type.
+        Finds the first available owned tile without a building.
+        """
+        # 1. Action 0 is "Do Nothing"
+        if mine_type == 0:
+            return True, "skipped"
+
+        # 2. Global Limit Check
+        current_mines = self.get_mine_count(player_id)
+        resource_tiles = self.get_resource_tile_count(player_id)
+        if current_mines >= resource_tiles:
+            return False, f"limit_reached_{current_mines}/{resource_tiles}"
+
+        # 3. Find a valid tile for the player
+        # We look for tiles where: grid[r,c,0] == player_id AND grid[r,c,1] == 0 (empty)
+        # The grid structure: [layer 0: owner, layer 1: building_type, ...]
+        valid_tiles = np.argwhere((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] == 0))
+
+        if len(valid_tiles) == 0:
+            return False, "no_empty_owned_tiles"
+
+        # Pick the first available tile (or you could pick randomly)
+        r, c = valid_tiles[0]
+
+        # 4. Build the specific Mine Type
+        # We store the mine_type (1-5) directly in the building layer
+        self.grid[r, c, 1] = mine_type 
+        
+        return True, f"built_type_{mine_type}_at_{r}_{c}"
