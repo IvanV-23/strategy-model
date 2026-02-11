@@ -15,40 +15,35 @@ class PlayerEnv:
         # Index 0: Gold, 1: Wood, 2: Soldiers, 3: Gold Buildings
         self._resources = np.array([gold, wood, soldiers, gold_buildings], dtype=np.int32)
         return self._resources
-    def resource_calculation(self, board_grid):
+    def resource_calculation(self, owned_tiles, wood_income=0, gold_income=0):
             reward = 0.0
-            # Get owned tiles
-            player_tiles_count = np.sum(board_grid[:, :, 0] == 1)
-            opponent_tiles_count = np.sum(board_grid[:, :, 0] == 2)
 
+            gold_income = 1 + owned_tiles * 2 + gold_income
+            self._resources[0] += gold_income 
             #Gold calculation
-            self._resources[0] += 1 
-            #self._resources[0] += self._resources[3] * 2         
-            self._resources[0] += player_tiles_count * 2  
 
-            #self._resources[0] -= self._resources[2]*0.01
 
             #Wood calculation
+            wood_income = 1 + wood_income + self._resources[3] * 2
 
-            self._resources[1] += self._resources[3] * 2  
-            print(f"DEBUG: Player has {player_tiles_count} tiles, Opponent has {opponent_tiles_count} tiles.")
+            self._resources[1] +=  wood_income
     
             #Resource rewards
-            
-            #if opponent_tiles_count > player_tiles_count:
-            #    reward -= 0.1 * (opponent_tiles_count - player_tiles_count)
-            #    return reward
-            
-            reward =  (self._resources[2]*0.1 + self._resources[3]*0.1) * (player_tiles_count) 
+            #TODO: Update reward based on incomes instead of total resoruces
+                      
+            reward =  (self._resources[2]*0.1 + self._resources[3]*0.1 + gold_income*0.1 + wood_income*0.1) + owned_tiles
             
             return reward
+
     def trade(self):
         """Performs a trade action to gain resources."""
         reward = 0.0
-        if self._resources[0] >= 5:
-            self._resources[0] -= 5
-        self._resources[1] += 10
-        reward += 0.0
+        if self._resources[1] >= 50:
+            self._resources[1] -= 50
+            self._resources[0] += 50
+            reward += 0.1
+        else:
+            reward -= 0.2
         return reward
 
     
@@ -65,7 +60,7 @@ class PlayerEnv:
                     # Rewards for expanding into neutral territory
                     self._resources[0] += 20
                     self._resources[1] += 10
-                    reward += 0.5 * player_tiles
+                    reward += player_tiles
                     print("Captured neutral tile.")
                 else:
                     # Rewards for successfully raiding the opponent
@@ -75,7 +70,7 @@ class PlayerEnv:
                     print(f"Captured enemy tile from player {previous_owner}!")
 
                 if base_captured:
-                    reward += 10.0  # Massive game-winning bonus
+                    reward += 10.0 * player_tiles  # Massive game-winning bonus
                     
             else:
                 print(f"Player attack failed! Reason: {reason}")
@@ -95,9 +90,9 @@ class PlayerEnv:
                 elif reason == "insufficient_force":
                     # Valid move, just not strong enough. 
                     # Small penalty to encourage building up power first.
-                    reward -= 0.05
+                    reward -= 0.01
                     # You might also lose a tiny bit of power for a failed siege
-                    self._resources[2] = max(0, self._resources[2] - 1) 
+                    #self._resources[2] = max(0, self._resources[2] - 1) 
 
             return reward
 
@@ -162,7 +157,7 @@ class PlayerEnv:
             self._resources[3] += num_mines     # Index 3: Gold Buildings (Mines)
             
             # Small positive reward for successful production
-            reward += (num_soldiers * 0.05) + (num_mines * 0.1)
+            reward += (num_soldiers * 0.1) + (num_mines * 0.1)
             print(f"ECONOMY: Built {num_soldiers} soldiers and {num_mines} mines.")
             
         else:

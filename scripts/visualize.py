@@ -54,12 +54,13 @@ def visualize_agent():
         with torch.no_grad():
             # Board State: [1, 4, 8, 8]
             board_tensor = torch.as_tensor(obs["board_state"], dtype=torch.float32).unsqueeze(0)
-            
+            b_stats = torch.as_tensor(obs["board_stats"], dtype=torch.float32).flatten()
+
             # Global Stats: Combine resources and turn into [1, 9]
             p_res = torch.as_tensor(obs["player_resources"], dtype=torch.float32).flatten()
             o_res = torch.as_tensor(obs["opponent_resources"], dtype=torch.float32).flatten()
             turn = torch.as_tensor([obs["turn_number"]], dtype=torch.float32)
-            stats_tensor = torch.cat([p_res, o_res, turn]).unsqueeze(0)
+            stats_tensor = torch.cat([p_res, o_res, turn, b_stats]).unsqueeze(0)
 
             # 5. Model Inference
             # eco_logits is a tuple: (sol_logits, mine_logits)

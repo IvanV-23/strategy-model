@@ -17,7 +17,7 @@ class OpponentEnv:
             Returns: (intent_to_attack, updated_resources)
             """
             # Passive resource income
-            self._resources[0] += 1 + owned_tiles * 3
+            self._resources[0] += 1 + owned_tiles * 2
             self._resources[1] += 1 + owned_tiles 
             
             # 1. Economic Logic: Build soldiers if possible every 5 turns
@@ -34,7 +34,7 @@ class OpponentEnv:
             
             # 2. Strategic Intent: Decide to attack every 10 turns
             intent_to_attack = False
-            if current_turn % 3 == 0 and self._resources[2] > 0:
+            if current_turn % 10 == 0 and self._resources[2] > 0:
                 intent_to_attack = True
 
             if self._resources[0] > 1000:
