@@ -167,7 +167,8 @@ class StrategyEnv(gym.Env):
             # 1. Resource calculation 
 
             reward += self.player_env.resource_calculation(owned_tiles=self.board_env.get_owned_tiles(owner_id=1),
-                                                           wood_income=self.board_env.collect_income(player_id=1)
+                                                           wood_income=self.board_env.collect_income(player_id=1),
+                                                              gold_income=self.board_env.collect_income(player_id=1)
                                                            )
             
 
@@ -275,7 +276,7 @@ class StrategyEnv(gym.Env):
                     # Small penalty to opponent resources for the failed campaign
                     self.opponent_env.resources[2] = max(0, self.opponent_env.resources[2] - self.opponent_env.resources[2]*0.1)
 
-            
+            self.board_env.create_trade_route(player_id=1)
 
 
             if self.player_env.resources[0] <= 0:
@@ -302,7 +303,7 @@ class StrategyEnv(gym.Env):
         state_data = {
             'p_res': self.player_env.resources,
             'o_res': self.opponent_env.resources,
-            'p_gen': (1 + self.board_env.get_owned_tiles(owner_id=1)*2,
+            'p_gen': (1 + self.board_env.get_owned_tiles(owner_id=1)*2 + self.board_env.collect_income(player_id=1),
                       self.board_env.collect_income(player_id=1)+ + self.player_env.resources[3] * 2,
                       0),
             'o_gen': (1 + self.board_env.get_owned_tiles(owner_id=2) * 2,
@@ -312,7 +313,11 @@ class StrategyEnv(gym.Env):
             "board": self.board_env.get_tile_data(),
             'dip_act': getattr(self, 'last_dip_str', "None"),
             'eco_act': getattr(self, 'last_eco_str', "None"),
-            'history': self.history[-5:],  # Show last 5 actions in history
+            "p1_routes": self.board_env.p1_trade_manager.active_routes,
+            "o1_routes": [], 
+            "p1_base": self.board_env.p1_trade_manager.base_coords,
+            "o1_base": (7,7),
+            'history': self.history[-5:], 
             
         }
 

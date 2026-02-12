@@ -34,7 +34,7 @@ class OpponentEnv:
             
             # 2. Strategic Intent: Decide to attack every 10 turns
             intent_to_attack = False
-            if current_turn % 10 == 0 and self._resources[2] > 0:
+            if current_turn % 3 == 0 and self._resources[2] > 0:
                 intent_to_attack = True
 
             if self._resources[0] > 1000:

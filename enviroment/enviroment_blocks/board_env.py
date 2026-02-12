@@ -1,19 +1,26 @@
 import numpy as np
 
+from enviroment.enviroment_blocks.board_blocks.trade_route_manager_env import TradeRouteManager
+
 class BoardEnv:
     def __init__(self, rows=8, cols=8):
+        #Board
         self.rows = rows
         self.cols = cols
-        self.grid = np.zeros((rows, cols, 3), dtype=np.int32)
+        
+        
         # Index 0: Owner (0=None, 1=P1, 2=P2)
         # Index 1: Status (e.g., 1=Building/Base)
         # Index 2: Soldiers (number of units on this specific tile)
         # Index 3: Resource Value (The static value of the tile)
         self.grid = np.zeros((rows, cols, 4), dtype=np.int32)
 
+        #Trade routes
+        self.p1_trade_manager = TradeRouteManager(base_coords=(0, 0))
+
     def reset(self):
-            # Reset everything BUT resources if you want the map to stay the same, 
-            # or call _generate_resources() again for a brand new map.
+            # Reset everything 
+
             resource_layer = self.grid[:, :, 3].copy() 
             self.grid = np.zeros((self.rows, self.cols, 4), dtype=np.int32)
             self.grid[:, :, 3] = resource_layer
@@ -21,8 +28,12 @@ class BoardEnv:
             # Set starting positions
             self.grid[0, 0, :3] = [1, 1, 10]
             self.grid[self.rows-1, self.cols-1, :3] = [2, 1, 10]
+
             #Generate new resources
             self._generate_resources()
+
+            #REset trade routes
+            self.p1_trade_manager.active_routes = []
 
             return self.grid
 
@@ -379,17 +390,20 @@ class BoardEnv:
 
 #------ Additional methods for resource management, posibly a new class in the future ------
 
-    def get_resource_tile_count(self, player_id):
-            """
-            Returns the number of tiles owned by the player that have 
-            actual resource value (wood > 0).
-            """
-            owned_mask = (self.grid[:, :, 0] == player_id)
-            has_resource_mask = (self.grid[:, :, 3] > 0)
-            
-            # Combine masks: Owned AND has resources
-            resource_tiles = np.logical_and(owned_mask, has_resource_mask)
-            return np.sum(resource_tiles)
+    def get_resource_tile_count(self, player_id: int) -> int:
+        """
+        Returns the count of tiles owned by the player that have a 
+        resource value greater than 0 in Layer 3.
+        """
+        # Filter for tiles owned by this player (Layer 0)
+        owned_mask = (self.grid[:, :, 0] == player_id)
+        
+        # Filter for tiles that actually have resources generated (Layer 3)
+        has_resource_mask = (self.grid[:, :, 3] > 0)
+        
+        # The count of valid buildable spots currently owned
+        valid_spots = np.logical_and(owned_mask, has_resource_mask)
+        return int(np.sum(valid_spots))
 
     def get_mine_count(self, player_id):
         """
@@ -402,33 +416,98 @@ class BoardEnv:
         return np.sum(player_mines)
 
     def build_mine(self, player_id, mine_type):
-        """
-        Attempts to build a specific mine type.
-        Finds the first available owned tile without a building.
-        """
-        # 1. Action 0 is "Do Nothing"
-        if mine_type == 0:
-            return True, "skipped"
+            """
+            Attempts to build a specific mine type on a resource-rich tile.
+            """
+            # 1. Action 0 is "Do Nothing"
+            if mine_type == 0:
+                return True, "skipped"
 
-        # 2. Global Limit Check
-        current_mines = self.get_mine_count(player_id)
-        resource_tiles = self.get_resource_tile_count(player_id)
-        if current_mines >= resource_tiles:
-            return False, f"limit_reached_{current_mines}/{resource_tiles}"
+            # 2. Global Limit Check
+            current_mines = self.get_mine_count(player_id)
+            resource_tiles = self.get_resource_tile_count(player_id)
+            if current_mines >= resource_tiles:
+                return False, f"limit_reached_{current_mines}/{resource_tiles}"
 
-        # 3. Find a valid tile for the player
-        # We look for tiles where: grid[r,c,0] == player_id AND grid[r,c,1] == 0 (empty)
-        # The grid structure: [layer 0: owner, layer 1: building_type, ...]
-        valid_tiles = np.argwhere((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] == 0))
+            # 3. Find a valid tile for the player
+            # UPDATED: We now check Owner (L0), No Building (L1), AND Resource Value > 0 (L3)
+            valid_tiles = np.argwhere(
+                (self.grid[:, :, 0] == player_id) & 
+                (self.grid[:, :, 1] == 0) & 
+                (self.grid[:, :, 3] > 0)
+            )
 
-        if len(valid_tiles) == 0:
-            return False, "no_empty_owned_tiles"
+            if len(valid_tiles) == 0:
+                # This is a critical fallback in case the mask and logic get out of sync
+                return False, "no_valid_resource_tiles_available"
 
-        # Pick the first available tile (or you could pick randomly)
-        r, c = valid_tiles[0]
+            # 4. Strategy: Which resource tile to pick?
+            # Option A: Pick the FIRST available (current behavior)
+            # r, c = valid_tiles[0]
+            
+            # Option B: Pick the tile with the HIGHEST resource value (Better for the Agent)
+            best_idx = np.argmax([self.grid[tr, tc, 3] for tr, tc in valid_tiles])
+            r, c = valid_tiles[best_idx]
 
-        # 4. Build the specific Mine Type
-        # We store the mine_type (1-5) directly in the building layer
-        self.grid[r, c, 1] = mine_type 
-        
-        return True, f"built_type_{mine_type}_at_{r}_{c}"
+            # 5. Build the specific Mine Type
+            self.grid[r, c, 1] = mine_type 
+            
+            return True, f"built_type_{mine_type}_at_{r}_{c}"
+
+#------- methods for trade route management-----------
+
+    def create_trade_route(self, player_id: int) -> tuple[bool, str]:
+            """
+            Automatically selects an eligible mine and establishes a trade route to the base.
+            Validation:
+            1. Checks if player has mines without existing routes.
+            2. Checks if there is "room" for more routes (Routes < Mines).
+            """
+            manager = self.p1_trade_manager if player_id == 1 else None
+            
+            # 1. Clean up the manager first (remove routes to lost/destroyed mines)
+            manager.validate_routes(self.grid, player_id)
+
+            # 2. Find all current mines owned by the player
+            # We assume grid[r, c, 1] > 0 means a mine is present
+            all_mines = np.argwhere(
+                (self.grid[:, :, 0] == player_id) & 
+                (self.grid[:, :, 1] > 0)
+            )
+
+            # 3. Filter for mines that do NOT have a route yet
+            eligible_mines = [
+                (tuple(pos)) for pos in all_mines 
+                if tuple(pos) not in manager.active_routes and tuple(pos) != manager.base_coords
+            ]
+
+            if not eligible_mines:
+                return False, "no_unconnected_mines_available"
+
+            # 4. Strategy: Which mine to connect?
+            # We pick the furthest mine to maximize the Manhattan distance bonus immediately.
+            base_r, base_c = manager.base_coords
+            furthest_mine = max(
+                eligible_mines, 
+                key=lambda pos: abs(pos[0] - base_r) + abs(pos[1] - base_c)
+            )
+
+            # 5. Establish the route
+            success = manager.create_route(furthest_mine)
+            
+            if success:
+                return True, f"route_created_to_{furthest_mine}"
+            return False, "failed_to_create_route"
+
+    def collect_income(self, player_id):
+            # 1. Base Tile Income
+            owned_mask = (self.grid[:, :, 0] == player_id)
+            #tile_income = np.sum(self.grid[owned_mask, 3])
+            tile_income = 0
+            
+            # 2. Trade Manager Income
+            manager = self.p1_trade_manager if player_id == 1 else None
+            manager.validate_routes(self.grid, player_id) # Clean up lost mines first
+            trade_income = manager.calculate_income(self.grid)
+            
+            return tile_income + trade_income
