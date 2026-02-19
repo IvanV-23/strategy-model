@@ -21,7 +21,7 @@ class TradeRouteManager:
             # Distance bonus: |r1-r2| + |c1-c2|
             distance = abs(mr - br) + abs(mc - bc)
             mine_level = grid[mr, mc, 1]
-            total_bonus += (mine_level * distance) * 0.1
+            total_bonus += (mine_level * distance) 
             
         return total_bonus
 
