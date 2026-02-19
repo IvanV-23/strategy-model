@@ -22,19 +22,19 @@ class OpponentEnv:
             
             # 1. Economic Logic: Build soldiers if possible every 5 turns
             if current_turn % 1 == 0:
-                can_afford_gold = self._resources[0] // 20
-                can_afford_wood = self._resources[1] // 10
+                can_afford_gold = self._resources[0] // 15
+                can_afford_wood = self._resources[1] // 7
             
                 num_to_build = int(min(can_afford_gold, can_afford_wood))
 
                 if num_to_build > 0:
-                    self._resources[0] -= 20 * num_to_build
-                    self._resources[1] -= 10 * num_to_build
+                    self._resources[0] -= 15 * num_to_build
+                    self._resources[1] -= 7 * num_to_build
                     self._resources[2] += num_to_build  # Gain a batch of soldiers
             
             # 2. Strategic Intent: Decide to attack every 10 turns
             intent_to_attack = False
-            if current_turn % 10 == 0 and self._resources[2] > 0:
+            if current_turn % 3 == 0 and self._resources[2] > 0:
                 intent_to_attack = True
 
             if self._resources[0] > 1000:

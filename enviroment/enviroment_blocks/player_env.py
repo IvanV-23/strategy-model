@@ -15,12 +15,16 @@ class PlayerEnv:
         # Index 0: Gold, 1: Wood, 2: Soldiers, 3: Gold Buildings
         self._resources = np.array([gold, wood, soldiers, gold_buildings], dtype=np.int32)
         return self._resources
-    def resource_calculation(self, owned_tiles, wood_income=0, gold_income=0):
+    def resource_calculation(self, owned_tiles, wood_income=0, gold_income=0, trade_routes=0, game_turn=0):
             reward = 0.0
 
-            gold_income = 1 + owned_tiles * 2 + gold_income
-            self._resources[0] += gold_income 
+            gold_income = 1 + owned_tiles + gold_income
+            gold_expenses = self._resources[2] * 0.005
+            self._resources[0] += gold_income - gold_expenses
             #Gold calculation
+            print(f"Gold expenses {gold_expenses}")
+            print(f"Gold gold_income {gold_income}")
+            
 
 
             #Wood calculation
@@ -31,19 +35,24 @@ class PlayerEnv:
             #Resource rewards
             #TODO: Update reward based on incomes instead of total resoruces
                       
-            reward =  (self._resources[2]*0.1 + self._resources[3]*0.1 + gold_income*0.1 + wood_income*0.1) + owned_tiles
+            reward =  (self._resources[2]*0.2 + self._resources[3]*0.2 + gold_income*0.3 + wood_income*0.3 + len(trade_routes)*2 + owned_tiles*0.5 - (self.resources[1]*0.02*game_turn/1000))
             
             return reward
 
-    def trade(self):
+    def trade(self, trade_routes:int):
         """Performs a trade action to gain resources."""
         reward = 0.0
-        if self._resources[1] >= 50:
-            self._resources[1] -= 50
-            self._resources[0] += 50
-            reward += 0.1
+        if trade_routes == 0:
+            reward -= 0.01
+            print("Impossible to trade without trade routes")
+            return reward
+        if self._resources[1] >= trade_routes*50:
+            self._resources[1] -= trade_routes*50
+            self._resources[0] += trade_routes*25
+            print("Successfully traded for gold")
+            reward += 0.1*trade_routes*25
         else:
-            reward -= 0.2
+            reward -= 0.01
         return reward
 
     
@@ -60,7 +69,7 @@ class PlayerEnv:
                     # Rewards for expanding into neutral territory
                     self._resources[0] += 20
                     self._resources[1] += 10
-                    reward += player_tiles
+                    reward += 1 + player_tiles
                     print("Captured neutral tile.")
                 else:
                     # Rewards for successfully raiding the opponent

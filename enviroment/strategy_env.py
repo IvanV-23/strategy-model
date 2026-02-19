@@ -37,10 +37,10 @@ class StrategyEnv(gym.Env):
 
         # Define the action space for Diplomacy and Economy
         # Diplomacy: 0: Trade, 1: Pass, 2: Attack
-        # Economy: [0] Soldiers to build (0-5), [1] Mines to build (0-5)
+
         ## 0 means "Do nothing" for that specific unit
         self.diplomacy_action_space = spaces.Discrete(3)
-        self.economy_action_space = spaces.MultiDiscrete([6, 6])
+        self.economy_action_space = spaces.MultiDiscrete([10, 6, 6])  # [soldiers, mines, trade]
         self.distribution_action_space = spaces.Discrete(5)
         self.target_action_space = spaces.Discrete(64)  # Assuming a 8x8 board
         
@@ -58,7 +58,7 @@ class StrategyEnv(gym.Env):
             "opponent_resources": spaces.Box(low=0, high=1000, shape=(3,), dtype=np.int32), 
             "turn_number": spaces.Discrete(1000),
             "board_state": spaces.Box(low=0, high=255, shape=(5, 8, 8), dtype=np.int32),
-            "board_stats": spaces.Box(low=0, high=1, shape=(2,), dtype=np.float32),
+            "board_stats": spaces.Box(low=0, high=1, shape=(6,), dtype=np.float32),
         })
 
         self.current_turn = 0
@@ -101,6 +101,7 @@ class StrategyEnv(gym.Env):
         # action["economy"] is now an array like [3, 0]
         self.soldiers_to_build = action["economy"][0]
         self.mines_to_build = action["economy"][1]
+        self.trade_route_action = action["economy"][2]
 
         # Distribution Head
         self.distribution_action = action["distribution"]
@@ -167,7 +168,10 @@ class StrategyEnv(gym.Env):
             # 1. Resource calculation 
 
             reward += self.player_env.resource_calculation(owned_tiles=self.board_env.get_owned_tiles(owner_id=1),
-                                                           wood_income=self.board_env.collect_income(player_id=1)
+                                                           wood_income=self.board_env.collect_wood_income(player_id=1),
+                                                           gold_income=self.board_env.collect_gold_income(player_id=1),
+                                                           trade_routes=self.board_env.p1_trade_manager.active_routes,
+                                                           game_turn = self.current_turn
                                                            )
             
 
@@ -177,10 +181,14 @@ class StrategyEnv(gym.Env):
             # 3. --- DIPLOMACY BRANCH ---
 
             if self.diplomacy_action == 0: # Trade
-                reward += self.player_env.trade()
+                reward += self.player_env.trade(trade_routes=len(self.board_env.p1_trade_manager.active_routes)) #------> Provisonal change for creating trade routes.
+                #success = self.board_env.create_trade_route(player_id=1)
+                #if success:
+                #    reward += 0.5
 
             elif self.diplomacy_action == 1: # Pass
-                reward -= self.board_env.get_owned_tiles(owner_id=2)*0.5
+                #reward -= self.board_env.get_owned_tiles(owner_id=2)*0.5
+                reward -= self.current_turn*0.001
             
             elif self.diplomacy_action == 2: # Attack (Modified for Soldiers)
                 print(f"Player attack ")
@@ -189,7 +197,7 @@ class StrategyEnv(gym.Env):
                 victory, base_captured, prev_owner, reason, defeated_soldiers = self.board_env.claim_target_tile(1, (self.target_row, self.target_col))
                 
                 res_msg = "VICTORY" if victory else "FAILED"
-                self.history.append(f"Attack on ({self.target_row},{self.target_col}): {res_msg}") # <--- ADD THIS
+                self.history.append(f"Attack on ({self.target_row},{self.target_col}): {res_msg}") 
                 
                 # 2. Update Player 1 resources based on result
                 attack_reward = self.player_env.process_battle_consequences(victory, base_captured, prev_owner, reason, self.board_env.get_owned_tiles(owner_id=1))
@@ -220,7 +228,7 @@ class StrategyEnv(gym.Env):
             )
             reward += eco_reward
 
-            costs = [(0,0), (50,0), (100,20), (150,50), (200,80), (500,200)]
+            costs = [(0,0), (50,0)]
             gold_cost, wood_cost = costs[self.mines_to_build]
 
             # 2. Execute build if player has resources
@@ -235,11 +243,22 @@ class StrategyEnv(gym.Env):
                 if not success:
                     print(f"Failed to build mines: {msg}")
                     reward -= 0.1
+
+
+            if self.trade_route_action == 1: # 1 means "Build Route"
+                success, msg = self.board_env.create_trade_route(player_id=1)
+                if success:
+                    print("Successfully built a trade route.")
+                    reward += 0.5
+                else:
+                    print(f"Failed to build trade route: {msg}")
+                    reward -= 0.01
+
             # 5. Turn and Resource Management
             self.current_turn += 1
             
             # 6. Turn and Opponent Status
-            reward -= self.opponent_env.score_calculation() + self.current_turn * 0.1 # Penalty for opponent strength
+            # reward -= self.opponent_env.score_calculation() + self.current_turn * 0.1 # Penalty for opponent strength
 
             # 7. Opponent Action
             # First,redistribute opponent soldiers to the board so the attack power is correct
@@ -250,7 +269,7 @@ class StrategyEnv(gym.Env):
 
             if intent_to_attack:
                 # The Board determines if the attack succeeds based on soldier proximity
-                battle_victory, base_captured, prev_owner, defeated_soldiers = self.board_env.claim_adjacent_tile(owner_id=2)
+                battle_victory, base_captured, prev_owner, defeated_soldiers, mine_captured = self.board_env.claim_adjacent_tile(owner_id=2)
                 
                 if battle_victory:
                     print("Opponent captured a tile!")
@@ -265,7 +284,10 @@ class StrategyEnv(gym.Env):
                     #if prev_owner == 1:
                         #if self.board_env.get_owned_tiles(owner_id=2) > self.board_env.get_owned_tiles(owner_id=1):
                             #reward -= 0.02  # Penalty for losing a tile to opponent
-                    
+                    if mine_captured:
+                        print("Mine captured")
+                        reward -= 0.1
+                        self.player_env.resources[3] -= 1
                     if base_captured:
                         reward -= 100.0
                         truncated = True
@@ -274,13 +296,15 @@ class StrategyEnv(gym.Env):
                     # Attack failed (Opponent wasn't strong enough or no adjacent tiles)
                     # Small penalty to opponent resources for the failed campaign
                     self.opponent_env.resources[2] = max(0, self.opponent_env.resources[2] - self.opponent_env.resources[2]*0.1)
+                    reward += 0.1
 
             
-
+            self.player_env.resources[3] = int (self.board_env.get_mine_count(player_id=1))
 
             if self.player_env.resources[0] <= 0:
                 # Bankrupt condition
-                reward -= 0.01 * self.player_env.resources[0]  # Small penalty for running out of gold        
+                #reward -= 0.01 * abs(self.player_env.resources[0])  # Small penalty for running out of gold        
+                reward -= 5
                 print(f"Player bankrupt! {reward} reward.")
 
             # 9. Rendering and Return
@@ -302,8 +326,8 @@ class StrategyEnv(gym.Env):
         state_data = {
             'p_res': self.player_env.resources,
             'o_res': self.opponent_env.resources,
-            'p_gen': (1 + self.board_env.get_owned_tiles(owner_id=1)*2,
-                      self.board_env.collect_income(player_id=1)+ + self.player_env.resources[3] * 2,
+            'p_gen': (1 + self.board_env.get_owned_tiles(owner_id=1)*2 + self.board_env.collect_gold_income(player_id=1),
+                       1 + self.board_env.collect_wood_income(player_id=1) + self.player_env.resources[3] * 2,
                       0),
             'o_gen': (1 + self.board_env.get_owned_tiles(owner_id=2) * 2,
                       1 + self.board_env.get_owned_tiles(owner_id=2),
@@ -312,7 +336,11 @@ class StrategyEnv(gym.Env):
             "board": self.board_env.get_tile_data(),
             'dip_act': getattr(self, 'last_dip_str', "None"),
             'eco_act': getattr(self, 'last_eco_str', "None"),
-            'history': self.history[-5:],  # Show last 5 actions in history
+            "p1_routes": self.board_env.p1_trade_manager.active_routes,
+            "o1_routes": [], 
+            "p1_base": self.board_env.p1_trade_manager.base_coords,
+            "o1_base": (7,7),
+            'history': self.history[-5:], 
             
         }
 

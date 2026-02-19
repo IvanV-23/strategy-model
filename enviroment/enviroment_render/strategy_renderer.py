@@ -65,9 +65,43 @@ class StrategyRenderer:
         pygame.draw.polygon(self.screen, self.COLORS["mine"], pts, 2)
         pygame.draw.line(self.screen, (255, 255, 255), (x - 2, y - 4), (x + 1, y - 6), 1)
 
+    def _draw_trade_routes(self, routes, base_coords, start_x, start_y, cell_size, color):
+            """Draws lines from the base to each active mine."""
+            if not routes:
+                return
+
+            for mine_r, mine_c in routes:
+                # Calculate pixel centers for the start (Base) and end (Mine)
+                # We add cell_size // 2 to target the center of the tile
+                start_pos = (
+                    start_x + base_coords[1] * cell_size + cell_size // 2,
+                    start_y + base_coords[0] * cell_size + cell_size // 2
+                )
+                end_pos = (
+                    start_x + mine_c * cell_size + cell_size // 2,
+                    start_y + mine_r * cell_size + cell_size // 2
+                )
+
+                # Create a pulsing effect for the "supply flow"
+                pulse = (math.sin(pygame.time.get_ticks() * 0.005) + 1) / 2
+                line_width = int(2 + pulse * 2)
+                
+                # Draw the main line
+                pygame.draw.line(self.screen, color, start_pos, end_pos, line_width)
+                
+                # Draw a small circle at the mine to show it's "connected"
+                pygame.draw.circle(self.screen, color, end_pos, 4)
+
     # --- RENDER LOGIC ---
 
-    def draw_board(self, board_data=None, target_index=None, rows=8, cols=8, cell_size=45):
+    def draw_board(self, board_data=None, routes=None, bases=None, target_index=None, rows=8, cols=8, cell_size=45):
+            """
+            Complete Board Drawing Method with Layered Rendering:
+            1. Background & Ownership
+            2. Trade Route Connections
+            3. Resources, Buildings, and Soldiers
+            4. Grid & Action Highlight
+            """
             if board_data is not None:
                 rows, cols = len(board_data), len(board_data[0])
             
@@ -76,6 +110,7 @@ class StrategyRenderer:
             small_font = pygame.font.Font(None, 20)
             tiny_font = pygame.font.Font(None, 16)
 
+            # --- LAYER 1: TILE BACKGROUNDS ---
             for r in range(rows):
                 for c in range(cols):
                     rect = pygame.Rect(start_x + c * cell_size, start_y + r * cell_size, cell_size, cell_size)
@@ -83,45 +118,64 @@ class StrategyRenderer:
                     
                     if board_data is not None:
                         tile = board_data[r][c]
-                        
-                        # 1. Tile Ownership Background
-                        if tile["owner"] == 1: color = (30, 60, 120)    # Blue-ish for Player
-                        elif tile["owner"] == 2: color = (100, 30, 30)  # Red-ish for Opponent
-                        pygame.draw.rect(self.screen, color, rect)
-
-                        # 2. Wood Resource Icons
-                        wood_count = tile.get("wood", 0)
-                        if wood_count > 0:
-                            self._draw_wood(rect.x + 12, rect.y + 10, scale=0.5)
-                            wood_txt = tiny_font.render(str(wood_count), True, self.COLORS["wood_light"])
-                            self.screen.blit(wood_txt, (rect.x + 22, rect.y + 4))
-
-                        # 3. BUILDINGS (Mines Type 1-5)
-                        # We check the status (layer 1 of your grid)
-                        status = tile.get("status", 0)
-                        if 1 <= status <= 5:
-                            # Draw the mine icon in the center of the tile
-                            self._draw_mine_icon(rect.centerx, rect.centery)
-                            
-                            # Add a small number to show the Mine Level (1-5)
-                            level_txt = tiny_font.render(str(int(status)), True, (255, 255, 255))
-                            self.screen.blit(level_txt, (rect.centerx + 8, rect.centery + 2))
-                        
-                        # 4. Soldiers (Center-Bottom)
-                        if tile["soldiers"] > 0:
-                            txt_col = (255, 255, 255) if tile["owner"] != 0 else (120, 120, 130)
-                            soldier_surf = small_font.render(str(tile["soldiers"]), True, txt_col)
-                            # Offset the text slightly so it doesn't overlap the mine icon perfectly
-                            text_rect = soldier_surf.get_rect(midbottom=(rect.centerx, rect.bottom - 2))
-                            self.screen.blit(soldier_surf, text_rect)
+                        if tile["owner"] == 1: 
+                            color = (30, 60, 120)    # Blue-ish for Player
+                        elif tile["owner"] == 2: 
+                            color = (100, 30, 30)  # Red-ish for Opponent
                     
-                    # Grid lines
+                    pygame.draw.rect(self.screen, color, rect)
+
+            # --- LAYER 2: TRADE ROUTES ---
+            # We draw these after backgrounds so they are visible, 
+            # but before icons so they don't cover text.
+            if routes is not None and bases is not None:
+                p1_routes, p2_routes = routes
+                p1_base, p2_base = bases
+                
+                # Draw Player 1 Routes (Cyan)
+                if p1_routes:
+                    self._draw_trade_routes(p1_routes, p1_base, start_x, start_y, cell_size, (0, 255, 255))
+                # Draw Player 2 Routes (Orange)
+                if p2_routes:
+                    self._draw_trade_routes(p2_routes, p2_base, start_x, start_y, cell_size, (255, 120, 0))
+
+            # --- LAYER 3: RESOURCES, BUILDINGS, & UNITS ---
+            for r in range(rows):
+                for c in range(cols):
+                    if board_data is None: continue
+                    
+                    tile = board_data[r][c]
+                    rect = pygame.Rect(start_x + c * cell_size, start_y + r * cell_size, cell_size, cell_size)
+
+                    # 1. Wood Resource Icons
+                    wood_count = tile.get("wood", 0)
+                    if wood_count > 0:
+                        self._draw_wood(rect.x + 12, rect.y + 10, scale=0.5)
+                        wood_txt = tiny_font.render(str(wood_count), True, self.COLORS["wood_light"])
+                        self.screen.blit(wood_txt, (rect.x + 22, rect.y + 4))
+
+                    # 2. Buildings (Mines Type 1-5)
+                    status = tile.get("status", 0)
+                    if 1 <= status <= 5:
+                        self._draw_mine_icon(rect.centerx, rect.centery)
+                        level_txt = tiny_font.render(str(int(status)), True, (255, 255, 255))
+                        self.screen.blit(level_txt, (rect.centerx + 8, rect.centery + 2))
+                    
+                    # 3. Soldiers
+                    if tile["soldiers"] > 0:
+                        txt_col = (255, 255, 255) if tile["owner"] != 0 else (120, 120, 130)
+                        soldier_surf = small_font.render(str(tile["soldiers"]), True, txt_col)
+                        text_rect = soldier_surf.get_rect(midbottom=(rect.centerx, rect.bottom - 2))
+                        self.screen.blit(soldier_surf, text_rect)
+
+                    # 4. Grid Lines
                     pygame.draw.rect(self.screen, self.COLORS["grid"], rect, 1)
 
-            # Target highlight (Action cursor)
+            # --- LAYER 4: SELECTION HIGHLIGHT ---
             if target_index is not None:
                 tr, tc = target_index // cols, target_index % cols
                 t_rect = pygame.Rect(start_x + tc * cell_size, start_y + tr * cell_size, cell_size, cell_size)
+                # Draw a thick neon border for the current action target
                 pygame.draw.rect(self.screen, self.COLORS["action"], t_rect, 3)
 
     def draw_resource_icons(self, count, start_x, start_y):
@@ -207,7 +261,14 @@ class StrategyRenderer:
             self.screen.blit(gen_font.render(f"+{o_gen[2]}", True, gen_col), (o_box_rect.x + 160, 158))
 
             # --- BOARD & LOGS ---
-            self.draw_board(board_data=state_data.get('board'), target_index=state_data.get('target_act'))
+            #self.draw_board(board_data=state_data.get('board'), target_index=state_data.get('target_act'))
+            
+            self.draw_board(
+            board_data=state_data.get('board'),
+            target_index=state_data.get('target_act'),
+            routes=(state_data.get('p1_routes'), state_data.get('o1_routes')),
+            bases=(state_data.get('p1_base'), state_data.get('o1_base'))
+            )
             
             log_box = pygame.Rect(self.width - 250, self.height - 120, 230, 100)
             pygame.draw.rect(self.screen, (20, 20, 30), log_box, border_radius=10)

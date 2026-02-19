@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+from models.heads import economy_head 
+
 class Actor(nn.Module):
     def __init__(self, action_dim_dip, action_dim_eco, action_dim_dist, action_dim_target, board_size=64):
         super().__init__()
@@ -17,13 +19,18 @@ class Actor(nn.Module):
         )
         
         # UPDATE: Changed from +8 to +10 for the new stats vector
-        self.fc_common = nn.Linear((64 * board_size) + 10, 256)
+        self.fc_common = nn.Linear((64 * board_size) + 14, 256)
 
-        # SINGLE HEAD for Economy: size is (eco_dim * 2) -> [Soldiers, Mines]
-        self.economy_head = nn.Linear(256, self.eco_dim * 2) 
+        # SINGLE HEAD for Economy: size is (eco_dim * 3) -> [Soldiers, Mines, Trade]
+        self.economy_head = economy_head.EconomyHead(
+                                    input_dim=256, 
+                                    sol_dim=10,   # 10
+                                    mine_dim=2,  # 6
+                                    trade_dim=6  # 6
+                             )
         
-        self.diplomacy_head = nn.Linear(256, action_dim_dip)
-        self.distribution_head = nn.Linear(256, action_dim_dist)
+        self.diplomacy_head = nn.Sequential(nn.Linear(256, action_dim_dip), nn.LayerNorm(action_dim_dip)) 
+        self.distribution_head = nn.Sequential(nn.Linear(256, action_dim_dist), nn.LayerNorm(action_dim_dist))
         self.target_head = nn.Conv2d(64, 1, kernel_size=1)
 
     def forward(self, board_state, global_stats, target_mask=None, build_mask=None):
@@ -35,13 +42,18 @@ class Actor(nn.Module):
         common = F.relu(self.fc_common(combined))
 
         # --- ECONOMY HEAD ---
-        eco_logits_all = self.economy_head(common)
-        soldiers_logits, mines_logits = torch.split(eco_logits_all, self.eco_dim, dim=1)
+        soldiers_logits, mines_logits, trade_logits = self.economy_head(common)
 
         if build_mask is not None:
-            # Use reshape to be safe, or just ensure build_mask is already (Batch, 6)
-            # The ~ operator flips the boolean mask for masked_fill
-            mines_logits = mines_logits.masked_fill(~build_mask.view(mines_logits.shape).bool(), -1e9)
+            # Mine Masking (Indices 0-5)
+            mines_logits = mines_logits.masked_fill(~build_mask[:, :2].bool(), -1e9)
+            
+            # Trade Masking (Index 6)
+            # We treat trade_logits as binary (0: skip, 1: build)
+            # We only mask index 1 (the 'build' action)
+            trade_mask = torch.ones_like(trade_logits).bool()
+            trade_mask[:, 1] = build_mask[:, 6].bool() 
+            trade_logits = trade_logits.masked_fill(~trade_mask, -1e9)
 
         # --- DIPLOMACY & DISTRIBUTION ---
         dip_logits = self.diplomacy_head(common)
@@ -52,7 +64,7 @@ class Actor(nn.Module):
         if target_mask is not None:
             target_logits = target_logits.masked_fill(~target_mask.bool(), -1e9)
 
-        return dip_logits, (soldiers_logits, mines_logits), dist_logits, target_logits
+        return dip_logits, (soldiers_logits, mines_logits, trade_logits), dist_logits, target_logits
 
 class Critic(nn.Module):
     def __init__(self, board_size: int = 64):
@@ -67,7 +79,7 @@ class Critic(nn.Module):
         
         # UPDATE: Changed from +8 to +10 to match the new ReplayBuffer stats
         self.value_head = nn.Sequential(
-            nn.Linear((16 * board_size) + 10, 64),
+            nn.Linear((16 * board_size) + 14, 64),
             nn.ReLU(),
             nn.Linear(64, 1)
         )

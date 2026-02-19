@@ -34,7 +34,7 @@ def visualize_agent():
         print(f"Loading weights from {model_path}")
         # Note: If you saved via PyTorch Lightning, the keys might have 'model.' prefix
         state_dict = torch.load(model_path, weights_only=True, map_location="cpu")
-        model.load_state_dict(state_dict)
+        model.load_state_dict(state_dict, strict=False)
     else:
         print("Warning: No model found at 'trained_model.pth'. Visualizing random agent.")
     
@@ -63,8 +63,9 @@ def visualize_agent():
             stats_tensor = torch.cat([p_res, o_res, turn, b_stats]).unsqueeze(0)
 
             # 5. Model Inference
-            # eco_logits is a tuple: (sol_logits, mine_logits)
-            dip_l, (sol_l, mine_l), dist_l, tar_l, _ = model(board_tensor, stats_tensor)
+            # eco_logits is a tuple: (sol_logits, mine_logits, trade_logits)
+            dip_l, eco_logits, dist_l, tar_l, _ = model(board_tensor, stats_tensor)
+            sol_l, mine_l, trade_l = eco_logits # Unpack the 3 components
         
             # 6. Apply Action Masking
             mask = info.get("action_mask", None)
@@ -79,7 +80,8 @@ def visualize_agent():
                 "diplomacy": torch.argmax(dip_l, dim=1).item(),
                 "economy": np.array([
                     torch.argmax(sol_l, dim=1).item(),
-                    torch.argmax(mine_l, dim=1).item()
+                    torch.argmax(mine_l, dim=1).item(),
+                    torch.argmax(trade_l, dim=1).item()
                 ], dtype=np.int64),
                 "distribution": torch.argmax(dist_l, dim=1).item(),
                 "target_tile": torch.argmax(tar_l, dim=1).item()
