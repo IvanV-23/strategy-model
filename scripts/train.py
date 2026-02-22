@@ -67,7 +67,7 @@ class StrategyLightningModule(pl.LightningModule):
                 boards = torch.as_tensor(obs_batch["board_state"], dtype=torch.float32, device=self.device).view(-1, 5, 8, 8)
                 p_res = torch.as_tensor(obs_batch["player_resources"], dtype=torch.float32, device=self.device).view(-1, 4)
                 o_res = torch.as_tensor(obs_batch["opponent_resources"], dtype=torch.float32, device=self.device).view(-1, 3)
-                m_stats = torch.as_tensor(obs_batch["board_stats"], dtype=torch.float32, device=self.device).view(-1, 6)
+                m_stats = torch.as_tensor(obs_batch["board_stats"], dtype=torch.float32, device=self.device).view(-1, 7)
                 turn = torch.as_tensor(obs_batch["turn_number"], dtype=torch.float32, device=self.device).view(-1, 1)
                 stats = torch.cat([p_res, o_res, m_stats, turn], dim=-1)
             else:  # Batch from ReplayBuffer
@@ -127,11 +127,13 @@ class StrategyLightningModule(pl.LightningModule):
                     self.log("game_stats/gold_income", stats_raw[:, 2].mean())
                     self.log("game_stats/wood_income", stats_raw[:, 3].mean())
                     self.log("game_stats/trade_routes", stats_raw[:, 4].mean())
+                    self.log("game_stats/net_income", stats_raw[:, 6].mean())
                 else:
                     self.log("game_stats/mines", stats_raw[1])
                     self.log("game_stats/gold_income", stats_raw[2])
                     self.log("game_stats/wood_income", stats_raw[3])
                     self.log("game_stats/trade_routes", stats_raw[4])
+                    self.log("game_stats/net_income", stats_raw[4])
 
             return boards, stats, t_mask, b_mask
 

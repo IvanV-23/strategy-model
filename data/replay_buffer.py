@@ -13,9 +13,9 @@ class ReplayBuffer:
         self.board_states = np.zeros((capacity, 5, 8, 8), dtype=np.float32)
         self.next_board_states = np.zeros((capacity, 5, 8, 8), dtype=np.float32)
         
-        # Stats: player(4) + opp(3) + mine_count(1) + mine_capacity(1) + turn(1) = 10
+        # Full Stats: = 15
         # Increased to 10 to be safe and scalable
-        self.stats_dim = 14
+        self.stats_dim = 15
         self.stats = np.zeros((capacity, self.stats_dim), dtype=np.float32)
         self.next_stats = np.zeros((capacity, self.stats_dim), dtype=np.float32)
 
@@ -44,6 +44,7 @@ class ReplayBuffer:
             wood_inc   = obs["board_stats"][3] 
             trade_routes_count = obs["board_stats"][4]
             owned_tiles = obs["board_stats"][5]
+            net_income = obs["board_stats"][6]
             
             return np.concatenate([
                 obs["player_resources"],    # [0,1,2,3]
@@ -54,6 +55,7 @@ class ReplayBuffer:
                 [wood_inc],                 # [10] <- New
                 [trade_routes_count],
                 [owned_tiles],
+                [net_income],
                 [obs["turn_number"]]        # [11] <- Moves to index 11
             ]).astype(np.float32)
 
