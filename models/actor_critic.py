@@ -19,7 +19,7 @@ class Actor(nn.Module):
         )
         
         # UPDATE: Changed from +8 to +10 for the new stats vector
-        self.fc_common = nn.Linear((64 * board_size) + 14, 256)
+        self.fc_common = nn.Linear((64 * board_size) + 15, 256)
 
         # SINGLE HEAD for Economy: size is (eco_dim * 3) -> [Soldiers, Mines, Trade]
         self.economy_head = economy_head.EconomyHead(
@@ -77,9 +77,8 @@ class Critic(nn.Module):
             nn.Flatten()
         )
         
-        # UPDATE: Changed from +8 to +10 to match the new ReplayBuffer stats
         self.value_head = nn.Sequential(
-            nn.Linear((16 * board_size) + 14, 64),
+            nn.Linear((16 * board_size) + 15, 64),
             nn.ReLU(),
             nn.Linear(64, 1)
         )

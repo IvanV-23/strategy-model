@@ -313,7 +313,7 @@ class BoardEnv:
             # 4. Transpose to (5, 8, 8)
             return combined.transpose(2, 0, 1).astype(np.int32)
 
-    def get_board_state_and_stats(self):
+    def get_board_state_and_stats(self)-> dict:
         # The spatial board as you already have it (5, 8, 8)
         spatial_board = self.full_board_state() 
         

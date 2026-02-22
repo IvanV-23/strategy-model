@@ -5,11 +5,14 @@ from gymnasium import spaces
 import numpy as np
 import pygame
 
+from enviroment.reward_env import RewardEnv
 from enviroment.enviroment_blocks.opponent_env import OpponentEnv
 from enviroment.enviroment_blocks.player_env import PlayerEnv
 from enviroment.enviroment_render.strategy_renderer import StrategyRenderer
 from enviroment.enviroment_blocks.board_env import BoardEnv
-
+from enviroment.enviroment_blocks.stats_env import StatsEnv
+from enviroment.enviroment_branches.diplomacy_env import DiplomacyEnv
+from enviroment.enviroment_branches.economy_env import EconomyEnv
 class StrategyEnv(gym.Env):
     """
     A Multi-Agent Reinforcement Learning environment for a strategic game.
@@ -26,7 +29,13 @@ class StrategyEnv(gym.Env):
         self.opponent_env = OpponentEnv()
         self.player_env = PlayerEnv()
         self.board_env = BoardEnv()
+        self.stats_env = StatsEnv(board_env=self.board_env,player_env=self.player_env)
+        self.reward_env = RewardEnv(board_env=self.board_env,player_env=self.player_env)
 
+        #Initiliaze enviroment branches
+        self.diplomacy_branch = DiplomacyEnv(board_env=self.board_env,player_env=self.player_env,opponent_env=self.opponent_env)
+        self.economy_branch = EconomyEnv(board_env=self.board_env,player_env=self.player_env,opponent_env=self.opponent_env)
+        
         #Initialize renderer
         # 1. Define dimensions FIRST
         self.screen_width = 800
@@ -79,7 +88,7 @@ class StrategyEnv(gym.Env):
             "opponent_resources": self.opponent_env.resources, # Returns the (3,) array
             "turn_number": self.current_turn,
             "board_state": self.board_env.full_board_state(),  # Returns a (5, 8, 8) array
-            "board_stats": self.board_env.get_board_state_and_stats()["stats"]  # New: Get additional board stats for the critic
+            "board_stats": self.stats_env.get_game_stats()
         }
 
     def _get_info(self) -> Dict[str, Any]:
@@ -166,93 +175,34 @@ class StrategyEnv(gym.Env):
             self.board_env.redistribute_soldiers(owner_id=2, total_soldiers=p2_soldiers, style=0)
 
             # 1. Resource calculation 
+            player_resources_calculation_result = self.stats_env.calculate_player_resources()
 
-            reward += self.player_env.resource_calculation(owned_tiles=self.board_env.get_owned_tiles(owner_id=1),
-                                                           wood_income=self.board_env.collect_wood_income(player_id=1),
-                                                           gold_income=self.board_env.collect_gold_income(player_id=1),
-                                                           trade_routes=self.board_env.p1_trade_manager.active_routes,
-                                                           game_turn = self.current_turn
-                                                           )
+            reward += self.reward_env.calculate_player_resources_reward(game_turn = self.current_turn)
             
-
             # 2. Store Actions for Rendering
             self._store_actions_for_rendering(action)
 
             # 3. --- DIPLOMACY BRANCH ---
 
-            if self.diplomacy_action == 0: # Trade
-                reward += self.player_env.trade(trade_routes=len(self.board_env.p1_trade_manager.active_routes)) #------> Provisonal change for creating trade routes.
-                #success = self.board_env.create_trade_route(player_id=1)
-                #if success:
-                #    reward += 0.5
+            action_result = self.diplomacy_branch.execute_diplomacy(diplomacy_action=self.diplomacy_action,
+                                                                    target_col=self.target_col,
+                                                                    target_row=self.target_row,
+                                                                    current_turn=self.current_turn
+                                                                    )
 
-            elif self.diplomacy_action == 1: # Pass
-                #reward -= self.board_env.get_owned_tiles(owner_id=2)*0.5
-                reward -= self.current_turn*0.001
-            
-            elif self.diplomacy_action == 2: # Attack (Modified for Soldiers)
-                print(f"Player attack ")
-                # 1. Ask the board to resolve combat based on spatial soldier distribution
-                # Note: claim_adjacent_tile now handles 'Attack Power > Defense' internally
-                victory, base_captured, prev_owner, reason, defeated_soldiers = self.board_env.claim_target_tile(1, (self.target_row, self.target_col))
-                
-                res_msg = "VICTORY" if victory else "FAILED"
-                self.history.append(f"Attack on ({self.target_row},{self.target_col}): {res_msg}") 
-                
-                # 2. Update Player 1 resources based on result
-                attack_reward = self.player_env.process_battle_consequences(victory, base_captured, prev_owner, reason, self.board_env.get_owned_tiles(owner_id=1))
-                reward += attack_reward
-
-                # 3. Update Opponent resources if they lost
-                if victory:
-                    # If P1 won, P2 loses soldiers and resources
-                    self.opponent_env.resources[0] = max(0, self.opponent_env.resources[0] - 50)
-                    self.opponent_env.resources[1] = max(0, self.opponent_env.resources[1] - 25)
-                    
-                    # Soldiers are already handled by redistribution in the next step, 
-                    # but let's reduce their pool directly for the loss:
-                    self.opponent_env.resources[2] = max(0, self.opponent_env.resources[2] - defeated_soldiers)
-                    reward += defeated_soldiers * 0.01  
-
-                # 4. Handle game termination
-                if base_captured:
-                    truncated = True
-                    print(f"Opponent defeated! Total Reward: {reward}")
+            truncated = action_result["truncated"]
+            reward += action_result["reward"]
+            self.history.append(action_result["history"])
 
             # 4. --- ECONOMY BRANCH ---
 
+            economy_action_result = self.economy_branch.execute_economy_action(new_soldiers=self.soldiers_to_build,
+                                                                               new_mines=self.mines_to_build,
+                                                                               trade_route_action=self.trade_route_action
+                                                                               )
 
-            eco_reward = self.player_env.process_economy(
-                num_soldiers=self.soldiers_to_build, 
-                num_mines=0
-            )
-            reward += eco_reward
+            reward += economy_action_result["reward"]
 
-            costs = [(0,0), (50,0)]
-            gold_cost, wood_cost = costs[self.mines_to_build]
-
-            # 2. Execute build if player has resources
-            if self.player_env.resources[0] >= gold_cost and self.player_env.resources[1] >= wood_cost:
-                success, msg = self.board_env.build_mine(1, self.mines_to_build)              
-                if success and self.mines_to_build > 0:
-                    self.player_env.resources[0] -= gold_cost
-                    self.player_env.resources[1] -= wood_cost
-                    reward += 0.5 * self.mines_to_build  # Reward for successful construction
-                    self.player_env.resources[3] += 1 * self.mines_to_build  # Each mine increases wood income
-                    print(f"Built {self.mines_to_build} mines. Reward: {reward}")
-                if not success:
-                    print(f"Failed to build mines: {msg}")
-                    reward -= 0.1
-
-
-            if self.trade_route_action == 1: # 1 means "Build Route"
-                success, msg = self.board_env.create_trade_route(player_id=1)
-                if success:
-                    print("Successfully built a trade route.")
-                    reward += 0.5
-                else:
-                    print(f"Failed to build trade route: {msg}")
-                    reward -= 0.01
 
             # 5. Turn and Resource Management
             self.current_turn += 1
@@ -326,8 +276,8 @@ class StrategyEnv(gym.Env):
         state_data = {
             'p_res': self.player_env.resources,
             'o_res': self.opponent_env.resources,
-            'p_gen': (1 + self.board_env.get_owned_tiles(owner_id=1)*2 + self.board_env.collect_gold_income(player_id=1),
-                       1 + self.board_env.collect_wood_income(player_id=1) + self.player_env.resources[3] * 2,
+            'p_gen': (self.player_env.gold_net_income,
+                      self.player_env.wood_raw_income,
                       0),
             'o_gen': (1 + self.board_env.get_owned_tiles(owner_id=2) * 2,
                       1 + self.board_env.get_owned_tiles(owner_id=2),
