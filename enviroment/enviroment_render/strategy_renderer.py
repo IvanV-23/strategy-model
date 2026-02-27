@@ -1,3 +1,4 @@
+from cmath import rect
 import pygame
 import numpy as np
 import math
@@ -25,7 +26,12 @@ class StrategyRenderer:
             "helmet_dark": (100, 100, 100),
             "mine": (200, 150, 255),
             "grid": (50, 50, 60),
-            "mine_icon": (0, 255, 100)
+            "mine_icon": (0, 255, 100),
+            "warehouse": (210, 180, 140),
+            "warehouse_roof": (100, 50, 30),
+            "base": (200, 200, 200),        # Light stone/grey
+            "base_accent": (50, 50, 50),    # Dark trim
+            "base_flag": (255, 255, 0)      # Yellow flag/emblem
         }
 
     def _init_pygame(self, render_mode):
@@ -92,6 +98,70 @@ class StrategyRenderer:
                 # Draw a small circle at the mine to show it's "connected"
                 pygame.draw.circle(self.screen, color, end_pos, 4)
 
+    def _draw_warehouse_icon(self, x, y):
+        # Draw the main body of the shed
+        body_rect = pygame.Rect(x - 8, y - 2, 16, 10)
+        pygame.draw.rect(self.screen, self.COLORS["warehouse"], body_rect)
+        pygame.draw.rect(self.screen, (0, 0, 0), body_rect, 1) # Outline
+        
+        # Draw the gabled roof (Triangle)
+        roof_pts = [(x - 11, y - 2), (x, y - 10), (x + 11, y - 2)]
+        pygame.draw.polygon(self.screen, self.COLORS["warehouse_roof"], roof_pts)
+        pygame.draw.polygon(self.screen, (0, 0, 0), roof_pts, 1) # Outline
+        
+        # Small door
+        door_rect = pygame.Rect(x - 2, y + 2, 4, 6)
+        pygame.draw.rect(self.screen, (60, 40, 20), door_rect)
+        
+    def _draw_progress_bar(self, x, y, width, height, current, maximum, color):
+        # Background (Empty bar)
+        bg_rect = pygame.Rect(x, y, width, height)
+        pygame.draw.rect(self.screen, (40, 40, 50), bg_rect, border_radius=2)
+        
+        # Fill (Current progress)
+        fill_percent = min(1.0, current / maximum) if maximum > 0 else 0
+        if fill_percent > 0:
+            fill_rect = pygame.Rect(x, y, int(width * fill_percent), height)
+            pygame.draw.rect(self.screen, color, fill_rect, border_radius=2)
+        
+        # Border
+        pygame.draw.rect(self.screen, (100, 100, 100), bg_rect, 1, border_radius=2)
+   
+    def _draw_base_icon(self, x, y):
+        # Main Tower Body
+        body_rect = pygame.Rect(x - 12, y - 5, 24, 15)
+        pygame.draw.rect(self.screen, self.COLORS["base"], body_rect)
+        pygame.draw.rect(self.screen, self.COLORS["base_accent"], body_rect, 1)
+
+        # Battlements (The "teeth" on top)
+        for i in range(-12, 12, 6):
+            battlement = pygame.Rect(x + i, y - 9, 4, 4)
+            pygame.draw.rect(self.screen, self.COLORS["base"], battlement)
+            pygame.draw.rect(self.screen, self.COLORS["base_accent"], battlement, 1)
+
+        # Central Gate
+        gate_rect = pygame.Rect(x - 4, y + 2, 8, 8)
+        pygame.draw.rect(self.screen, (20, 20, 20), gate_rect)
+        
+        # Small Flag/Banner
+        pygame.draw.line(self.screen, (200, 200, 200), (x + 8, y - 14), (x + 8, y - 9), 2)
+        pygame.draw.polygon(self.screen, self.COLORS["base_flag"], [(x + 8, y - 14), (x + 16, y - 11), (x + 8, y - 8)])
+    
+    def _draw_mine_lvl2_icon(self, x, y):
+        # Draw a wooden support structure (scaffolding) behind the mine
+        pygame.draw.rect(self.screen, (80, 40, 0), (x - 10, y + 2, 20, 8)) # Base beam
+        pygame.draw.line(self.screen, (80, 40, 0), (x - 8, y + 2), (x - 8, y - 8), 2) # Left pillar
+        pygame.draw.line(self.screen, (80, 40, 0), (x + 8, y + 2), (x + 8, y - 8), 2) # Right pillar
+
+        # Draw the main crystal (slightly larger than lvl 1)
+        pts = [(x, y - 12), (x + 10, y - 2), (x + 6, y + 8), (x - 6, y + 8), (x - 10, y - 2)]
+        pygame.draw.polygon(self.screen, (150, 80, 255), pts) # Darker purple fill
+        pygame.draw.polygon(self.screen, (220, 180, 255), pts, 2) # Bright highlight border
+        
+        # Add a second smaller "glow" crystal next to it
+        small_pts = [(x+4, y+2), (x+9, y+4), (x+7, y+9), (x+2, y+7)]
+        pygame.draw.polygon(self.screen, self.COLORS["mine_icon"], small_pts)
+
     # --- RENDER LOGIC ---
 
     def draw_board(self, board_data=None, routes=None, bases=None, target_index=None, rows=8, cols=8, cell_size=45):
@@ -156,11 +226,18 @@ class StrategyRenderer:
 
                     # 2. Buildings (Mines Type 1-5)
                     status = tile.get("status", 0)
-                    if 1 <= status <= 5:
+                    if status == 1: # Mine
                         self._draw_mine_icon(rect.centerx, rect.centery)
-                        level_txt = tiny_font.render(str(int(status)), True, (255, 255, 255))
+                        level_txt = tiny_font.render("M", True, (255, 255, 255))
                         self.screen.blit(level_txt, (rect.centerx + 8, rect.centery + 2))
-                    
+                    elif status == 2: # Warehouse
+                        self._draw_warehouse_icon(rect.centerx, rect.centery)
+                    elif status == 3: # Base (NEW)
+                        self._draw_base_icon(rect.centerx, rect.centery)
+                    elif status == 4: # Mine Lvl 2 (NEW)
+                        self._draw_mine_lvl2_icon(rect.centerx, rect.centery)
+                        level_txt = tiny_font.render("2", True, (0, 255, 100)) # Green '2' for high tier
+                        self.screen.blit(level_txt, (rect.centerx + 8, rect.centery + 2))        
                     # 3. Soldiers
                     if tile["soldiers"] > 0:
                         txt_col = (255, 255, 255) if tile["owner"] != 0 else (120, 120, 130)
@@ -185,106 +262,108 @@ class StrategyRenderer:
             self._draw_mine_icon(x_pos, y_pos)
 
     def render_frame(self, render_mode, state_data):
-            self._init_pygame(render_mode)
-            if render_mode == "human":
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT: pygame.quit()
+        self._init_pygame(render_mode)
+        if render_mode == "human":
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT: pygame.quit()
 
-            self.screen.fill(self.COLORS["bg"])
-            
-            # --- FONTS & COLORS ---
-            gen_font = pygame.font.Font(None, 24)
-            gen_col = (100, 255, 100)  # Light green for generation
-            
-            # --- LAYOUT ---
-            box_width, box_height, padding = 220, 180, 60
-            p_box_rect = pygame.Rect(padding, 40, box_width, box_height)
-            o_box_rect = pygame.Rect(self.width - box_width - padding, 40, box_width, box_height)
+        self.screen.fill(self.COLORS["bg"])
+        
+        # --- FONTS & COLORS ---
+        gen_font = pygame.font.Font(None, 24)
+        gen_col = (100, 255, 100)
+        
+        # --- DATA EXTRACTION ---
+        p_res = state_data['p_res']
+        p_cap = state_data.get('p1_capacity', [999, 999, 999])
+        o_res = state_data['o_res']
+        o_cap = state_data.get('o1_capacity', p_cap) 
+        p_gen = state_data.get('p_gen', [0, 0, 0])
+        o_gen = state_data.get('o_gen', [0, 0, 0])
 
-            # Draw Player/Opponent Info Boxes
-            pygame.draw.rect(self.screen, (35, 35, 45), p_box_rect, border_radius=15)
-            pygame.draw.rect(self.screen, (60, 60, 80), p_box_rect, 2, border_radius=15)
-            pygame.draw.rect(self.screen, (45, 30, 30), o_box_rect, border_radius=15)
-            pygame.draw.rect(self.screen, (100, 50, 50), o_box_rect, 2, border_radius=15)
+        # --- LAYOUT ---
+        box_width, box_height, padding = 220, 180, 60
+        p_box_rect = pygame.Rect(padding, 40, box_width, box_height)
+        o_box_rect = pygame.Rect(self.width - box_width - padding, 40, box_width, box_height)
 
-            # --- PLAYER RESOURCES ---
-            p_res = state_data['p_res']
-            p_gen = state_data.get('p_gen', [0, 0, 0]) # Default to 0 if not provided
-            
-            self.screen.blit(self.font.render("PLAYER", True, (100, 200, 255)), (p_box_rect.x + 20, 50))
-            
-            # Gold
-            self._draw_coin(p_box_rect.x + 30, 95)
-            self.screen.blit(self.font.render(f": {p_res[0]}", True, self.COLORS["gold"]), (p_box_rect.x + 55, 83))
-            self.screen.blit(gen_font.render(f"+{p_gen[0]}", True, gen_col), (p_box_rect.x + 160, 88))
-            
-            # Wood
-            self._draw_wood(p_box_rect.x + 30, 130)
-            self.screen.blit(self.font.render(f": {p_res[1]}", True, self.COLORS["wood"]), (p_box_rect.x + 55, 118))
-            self.screen.blit(gen_font.render(f"+{p_gen[1]}", True, gen_col), (p_box_rect.x + 160, 123))
-            
-            # Soldiers
-            self._draw_helmet(p_box_rect.x + 30, 165, self.COLORS["player_soldiers"])
-            self.screen.blit(self.font.render(f": {p_res[2]}", True, self.COLORS["player_soldiers"]), (p_box_rect.x + 55, 153))
-            self.screen.blit(gen_font.render(f"+{p_gen[2]}", True, gen_col), (p_box_rect.x + 160, 158))
-            
-            # --- INFRASTRUCTURE ---
-            mine_area_rect = pygame.Rect(p_box_rect.x - 5, p_box_rect.bottom + 10, box_width, 80)
-            if state_data.get('eco_act') == 1:
-                pulse = (math.sin(pygame.time.get_ticks() * 0.01) + 1) / 2
-                pygame.draw.rect(self.screen, (0, 80 * pulse, 30 * pulse), mine_area_rect, border_radius=12)
-                pygame.draw.rect(self.screen, self.COLORS["mine_icon"], mine_area_rect, 2, border_radius=12)
+        # Draw Boxes
+        pygame.draw.rect(self.screen, (35, 35, 45), p_box_rect, border_radius=15)
+        pygame.draw.rect(self.screen, (60, 60, 80), p_box_rect, 2, border_radius=15)
+        pygame.draw.rect(self.screen, (45, 30, 30), o_box_rect, border_radius=15)
+        pygame.draw.rect(self.screen, (100, 50, 50), o_box_rect, 2, border_radius=15)
 
-            mine_label = pygame.font.Font(None, 24).render("INFRASTRUCTURE: MINES", True, self.COLORS["mine"])
-            self.screen.blit(mine_label, (p_box_rect.x, p_box_rect.bottom + 15))
-            self.draw_resource_icons(p_res[3], p_box_rect.x + 10, p_box_rect.bottom + 45)
+        # --- RENDER PLAYER & OPPONENT RESOURCES ---
+        # Unified loop for both sides to keep code clean
+        sides = [
+            ("PLAYER", p_box_rect, p_res, p_cap, p_gen, (100, 200, 255)),
+            ("OPPONENT", o_box_rect, o_res, o_cap, o_gen, self.COLORS["opp_soldiers"])
+        ]
 
-            # --- OPPONENT RESOURCES ---
-            o_res = state_data['o_res']
-            o_gen = state_data.get('o_gen', [0, 0, 0])
+        for label, box, res, cap, gen, title_col in sides:
+            self.screen.blit(self.font.render(label, True, title_col), (box.x + 20, 50))
             
-            self.screen.blit(self.font.render("OPPONENT", True, self.COLORS["opp_soldiers"]), (o_box_rect.x + 20, 50))
-            
-            # Gold
-            self._draw_coin(o_box_rect.x + 30, 95)
-            self.screen.blit(self.font.render(f": {o_res[0]}", True, self.COLORS["gold"]), (o_box_rect.x + 55, 83))
-            self.screen.blit(gen_font.render(f"+{o_gen[0]}", True, gen_col), (o_box_rect.x + 160, 88))
-            
-            # Wood
-            self._draw_wood(o_box_rect.x + 30, 130)
-            self.screen.blit(self.font.render(f": {o_res[1]}", True, self.COLORS["wood"]), (o_box_rect.x + 55, 118))
-            self.screen.blit(gen_font.render(f"+{o_gen[1]}", True, gen_col), (o_box_rect.x + 160, 123))
-            
-            # Soldiers
-            self._draw_helmet(o_box_rect.x + 30, 165, self.COLORS["opp_soldiers"])
-            self.screen.blit(self.font.render(f": {o_res[2]}", True, self.COLORS["opp_soldiers"]), (o_box_rect.x + 55, 153))
-            self.screen.blit(gen_font.render(f"+{o_gen[2]}", True, gen_col), (o_box_rect.x + 160, 158))
+            rows = [
+                ("gold", res[0], cap[0], gen[0], 95),
+                ("wood", res[1], cap[1], gen[1], 130),
+                ("soldiers", res[2], cap[2], gen[2], 165)
+            ]
 
-            # --- BOARD & LOGS ---
-            #self.draw_board(board_data=state_data.get('board'), target_index=state_data.get('target_act'))
-            
-            self.draw_board(
+            for type_key, val, maximum, income, y_pos in rows:
+                # Draw Icon
+                if type_key == "gold": self._draw_coin(box.x + 30, y_pos)
+                elif type_key == "wood": self._draw_wood(box.x + 30, y_pos)
+                else: self._draw_helmet(box.x + 30, y_pos, title_col)
+                
+                # Draw Text
+                res_text = f"{val}/{maximum}"
+                text_col = (255, 50, 50) if val >= maximum else self.COLORS.get(type_key, title_col)
+                if type_key == "soldiers": text_col = title_col # Use side-specific color for soldiers
+                
+                self.screen.blit(self.font.render(res_text, True, text_col), (box.x + 55, y_pos - 15))
+                self.screen.blit(gen_font.render(f"+{income}", True, gen_col), (box.x + 175, y_pos - 10))
+                
+                # Draw Progress Bar under the text
+                bar_color = text_col
+                self._draw_progress_bar(box.x + 55, y_pos + 8, 110, 5, val, maximum, bar_color)
+
+        # --- INFRASTRUCTURE ---
+        # Mines
+        mine_label = gen_font.render("MINES", True, self.COLORS["mine"])
+        self.screen.blit(mine_label, (p_box_rect.x + 10, p_box_rect.bottom + 15))
+        self.draw_resource_icons(p_res[3], p_box_rect.x + 15, p_box_rect.bottom + 40)
+
+        # Warehouses
+        wh_label = gen_font.render("WAREHOUSES", True, self.COLORS["warehouse"])
+        self.screen.blit(wh_label, (p_box_rect.x + 10, p_box_rect.bottom + 85))
+        p_warehouses = state_data.get('p_warehouses', 0) 
+        for i in range(int(p_warehouses)):
+            wx = p_box_rect.x + 20 + ((i % 5) * 25)
+            wy = p_box_rect.bottom + 110 + ((i // 5) * 25)
+            self._draw_warehouse_icon(wx, wy)
+
+        # --- BOARD ---
+        self.draw_board(
             board_data=state_data.get('board'),
             target_index=state_data.get('target_act'),
             routes=(state_data.get('p1_routes'), state_data.get('o1_routes')),
             bases=(state_data.get('p1_base'), state_data.get('o1_base'))
-            )
-            
-            log_box = pygame.Rect(self.width - 250, self.height - 120, 230, 100)
-            pygame.draw.rect(self.screen, (20, 20, 30), log_box, border_radius=10)
-            pygame.draw.rect(self.screen, (50, 50, 70), log_box, 1, border_radius=10)
-            history = state_data.get('history', ["Game started..."])
-            for i, msg in enumerate(history[-3:]):
-                msg_surf = pygame.font.Font(None, 22).render(f"> {msg}", True, (200, 200, 200))
-                self.screen.blit(msg_surf, (log_box.x + 10, log_box.y + 30 + (i * 22)))
+        )
+        
+        # --- LOGS ---
+        log_box = pygame.Rect(self.width - 250, self.height - 120, 230, 100)
+        pygame.draw.rect(self.screen, (20, 20, 30), log_box, border_radius=10)
+        pygame.draw.rect(self.screen, (50, 50, 70), log_box, 1, border_radius=10)
+        for i, msg in enumerate(state_data.get('history', [])[-3:]):
+            msg_surf = pygame.font.Font(None, 22).render(f"> {msg}", True, (200, 200, 200))
+            self.screen.blit(msg_surf, (log_box.x + 10, log_box.y + 30 + (i * 22)))
 
-            # Header
-            turn_text = self.font.render(f"TURN: {state_data['turn']}", True, self.COLORS["text"])
-            self.screen.blit(turn_text, (self.width // 2 - 50, 20))
+        # --- HEADER ---
+        turn_text = self.font.render(f"TURN: {state_data['turn']}", True, self.COLORS["text"])
+        self.screen.blit(turn_text, (self.width // 2 - 50, 20))
 
-            if render_mode == "human":
-                pygame.display.flip()
-                self.clock.tick(self.metadata.get("render_fps", 4))
-            else:
-                return np.transpose(np.array(pygame.surfarray.pixels3d(self.screen)), axes=(1, 0, 2))
-            
+        if render_mode == "human":
+            pygame.display.flip()
+            self.clock.tick(self.metadata.get("render_fps", 4))
+        else:
+            return np.transpose(np.array(pygame.surfarray.pixels3d(self.screen)), axes=(1, 0, 2))
+  

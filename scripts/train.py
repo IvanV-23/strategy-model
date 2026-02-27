@@ -65,9 +65,9 @@ class StrategyLightningModule(pl.LightningModule):
             # --- Handle Observations ---
             if "board_stats" in obs_batch:  # Single observation from env.reset() or env.step()
                 boards = torch.as_tensor(obs_batch["board_state"], dtype=torch.float32, device=self.device).view(-1, 5, 8, 8)
-                p_res = torch.as_tensor(obs_batch["player_resources"], dtype=torch.float32, device=self.device).view(-1, 4)
+                p_res = torch.as_tensor(obs_batch["player_resources"], dtype=torch.float32, device=self.device).view(-1, 7)
                 o_res = torch.as_tensor(obs_batch["opponent_resources"], dtype=torch.float32, device=self.device).view(-1, 3)
-                m_stats = torch.as_tensor(obs_batch["board_stats"], dtype=torch.float32, device=self.device).view(-1, 7)
+                m_stats = torch.as_tensor(obs_batch["board_stats"], dtype=torch.float32, device=self.device).view(-1, 9)
                 turn = torch.as_tensor(obs_batch["turn_number"], dtype=torch.float32, device=self.device).view(-1, 1)
                 stats = torch.cat([p_res, o_res, m_stats, turn], dim=-1)
             else:  # Batch from ReplayBuffer
@@ -84,14 +84,14 @@ class StrategyLightningModule(pl.LightningModule):
                     # Single step collection
                     t_mask = torch.as_tensor(info_batch.get("action_mask", np.ones(64)), dtype=torch.bool, device=self.device).view(-1, 64)
                     b_mask = torch.as_tensor(
-                                                info_batch.get("build_mask", np.ones(7)), 
+                                                info_batch.get("build_mask", np.ones(8)), 
                                                 dtype=torch.bool, 
                                                 device=self.device
-                                            ).view(-1, 7) 
+                                            ).view(-1, 8) 
                 else:
                     # If masks were already batched by the ReplayBuffer/DataLoader
                     t_mask = info_batch[0].to(self.device).view(-1, 64) # m_target
-                    b_mask = info_batch[1].to(self.device).view(-1, 7)  # m_build
+                    b_mask = info_batch[1].to(self.device).view(-1, 8)  # m_build
 
             if boards.dim() == 5 and boards.size(0) == 1:
                 boards = boards.squeeze(0)
@@ -112,12 +112,17 @@ class StrategyLightningModule(pl.LightningModule):
                     self.log("game_stats/player_wood", res[1])
                     self.log("game_stats/player_soldiers", res[2])
                     self.log("game_stats/player_mines", res[3])
+                    self.log("game_stats/gold_capacity", res[4])
+                    self.log("game_stats/wood_capacity", res[5])
+
                 else:
                     # Log the average across the current training batch
                     self.log("game_stats/player_gold", res[:, 0].mean())
                     self.log("game_stats/player_wood", res[:, 1].mean())
                     self.log("game_stats/player_soldiers", res[:, 2].mean())
                     self.log("game_stats/player_mines", res[:, 3].mean())
+                    self.log("game_stats/gold_capacity", res[:, 4].mean())  
+                    self.log("game_stats/wood_capacity", res[:, 5].mean())
             
             if "board_stats" in obs_batch:
                 stats_raw = obs_batch["board_stats"]
@@ -127,13 +132,17 @@ class StrategyLightningModule(pl.LightningModule):
                     self.log("game_stats/gold_income", stats_raw[:, 2].mean())
                     self.log("game_stats/wood_income", stats_raw[:, 3].mean())
                     self.log("game_stats/trade_routes", stats_raw[:, 4].mean())
-                    self.log("game_stats/net_income", stats_raw[:, 6].mean())
+                    self.log("game_stats/net_income", stats_raw[:, 5].mean())
+                    self.log("game_stats/potential_mines", stats_raw[:, 6].mean())
+                    self.log("game_stats/potential_trade_routes", stats_raw[:, 7].mean())
                 else:
                     self.log("game_stats/mines", stats_raw[1])
                     self.log("game_stats/gold_income", stats_raw[2])
                     self.log("game_stats/wood_income", stats_raw[3])
                     self.log("game_stats/trade_routes", stats_raw[4])
-                    self.log("game_stats/net_income", stats_raw[4])
+                    self.log("game_stats/net_income", stats_raw[5])
+                    self.log("game_stats/potential_mines", stats_raw[6])
+                    self.log("game_stats/potential_trade_routes", stats_raw[7])
 
             return boards, stats, t_mask, b_mask
 
@@ -183,7 +192,7 @@ class StrategyLightningModule(pl.LightningModule):
                         board_t, stats_t, target_mask=t_mask, build_mask=b_mask
                     )
                 
-                sol_logits, mine_logits, trade_logits = eco_logits
+                sol_logits, mine_logits, trade_logits, wh_logits = eco_logits
 
                 # Sample Actions (Random-ish exploration start)
                 action = {
@@ -191,7 +200,8 @@ class StrategyLightningModule(pl.LightningModule):
                     "economy": [
                         torch.distributions.Categorical(logits=sol_logits).sample().item(),
                         torch.distributions.Categorical(logits=mine_logits).sample().item(),
-                        torch.distributions.Categorical(logits=trade_logits).sample().item()
+                        torch.distributions.Categorical(logits=trade_logits).sample().item(),
+                        torch.distributions.Categorical(logits=wh_logits).sample().item()
                     ],
                     "distribution": torch.distributions.Categorical(logits=dist_logits).sample().item(),
                     "target_tile": torch.distributions.Categorical(logits=target_logits).sample().item()
@@ -230,7 +240,7 @@ class StrategyLightningModule(pl.LightningModule):
                         board_t, stats_t, target_mask=t_mask, build_mask=b_mask
                     )
                 
-                sol_logits, mine_logits, trade_logits = eco_logits
+                sol_logits, mine_logits, trade_logits, wh_logits = eco_logits
 
                 # 3. Sample Actions
                 action = {
@@ -238,7 +248,8 @@ class StrategyLightningModule(pl.LightningModule):
                     "economy": [
                         torch.distributions.Categorical(logits=sol_logits).sample().item(),
                         torch.distributions.Categorical(logits=mine_logits).sample().item(),
-                        torch.distributions.Categorical(logits=trade_logits).sample().item()
+                        torch.distributions.Categorical(logits=trade_logits).sample().item(),
+                        torch.distributions.Categorical(logits=wh_logits).sample().item()
                     ],
                     "distribution": torch.distributions.Categorical(logits=dist_logits).sample().item(),
                     "target_tile": torch.distributions.Categorical(logits=target_logits).sample().item()
@@ -311,7 +322,7 @@ class StrategyLightningModule(pl.LightningModule):
             
             # 3. Get current policy logits and state values
             # We don't need next_states here anymore because GAE was computed during collection!
-            dip_logits, (sol_logits, mine_logits, trade_logits), dist_logits, target_logits, current_values = self.model(
+            dip_logits, (sol_logits, mine_logits, trade_logits, wh_logits), dist_logits, target_logits, current_values = self.model(
                 boards, stats, target_mask=t_mask, build_mask=b_mask
             )
 
@@ -330,6 +341,7 @@ class StrategyLightningModule(pl.LightningModule):
             dist_dist = torch.distributions.Categorical(logits=dist_logits)
             dist_target = torch.distributions.Categorical(logits=target_logits)
             dist_trade = torch.distributions.Categorical(logits=trade_logits)
+            dist_wh = torch.distributions.Categorical(logits=wh_logits)
 
             # 6. Multi-Head Actor Loss
             if a_eco.dim() == 1: a_eco = a_eco.unsqueeze(0)
@@ -340,10 +352,11 @@ class StrategyLightningModule(pl.LightningModule):
             log_prob_tra = dist_trade.log_prob(a_eco[:, 2].long().reshape(-1)) 
             log_prob_dist = dist_dist.log_prob(a_dist.long().reshape(-1))
             log_prob_target = dist_target.log_prob(a_target.long().reshape(-1))
+            log_prob_wh  = dist_wh.log_prob(a_eco[:, 3].long().reshape(-1))
 
             # Actor losses (Advantage tells us if the action was better than average)
             loss_dip = -(log_prob_dip * adv).mean()
-            loss_eco = -((log_prob_sol + log_prob_min + log_prob_tra) * adv).mean()
+            loss_eco = -((log_prob_sol + log_prob_min + log_prob_tra + log_prob_wh) * adv).mean()
             loss_dist = -(log_prob_dist * adv).mean()
             loss_target = -(log_prob_target * adv).mean()
 
@@ -358,8 +371,9 @@ class StrategyLightningModule(pl.LightningModule):
             )
             # 8. Entropy for Exploration
             total_entropy = (dist_dip.entropy() + dist_sol.entropy() + 
-                            dist_min.entropy() + dist_trade.entropy() + 
-                            dist_dist.entropy() + dist_target.entropy()).mean()
+                    dist_min.entropy() + dist_trade.entropy() + 
+                    dist_wh.entropy() + # NEW
+                    dist_dist.entropy() + dist_target.entropy()).mean()
 
             # Final Weighted Loss
             total_loss = actor_loss + (self.value_loss_coeff * critic_loss) - (self.entropy_coeff * total_entropy)

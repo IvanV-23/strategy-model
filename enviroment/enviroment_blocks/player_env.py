@@ -13,11 +13,14 @@ class PlayerEnv:
         self.gold_net_income = 0
         self.gold_raw_income = 0
         self.wood_raw_income = 0
+        #######Player capacity###################
+        
 
     def reset(self, gold=100, wood=50, soldiers=5, gold_buildings=0):
         """Initializes player resources."""
         # Index 0: Gold, 1: Wood, 2: Soldiers, 3: Gold Buildings
         self._resources = np.array([gold, wood, soldiers, gold_buildings], dtype=np.int32)
+        self._capacity = np.array([500, 500, 1000], dtype=np.int32)
         return self._resources
 
     
@@ -70,30 +73,6 @@ class PlayerEnv:
 
             return reward
 
-
-    def create_units(self):
-        """Creates soldiers using wood"""
-        reward = 0.0
-        if self._resources[1] >= 10:
-            self._resources[1] -= 10
-            self._resources[2] += 5 
-            reward += 0.1
-        else:
-            reward -= 0.1 # Penalty for insufficient wood
-        return reward
-    
-    def build_gold_getter(self) -> float:
-        reward = 0.0
-        cost_gold = 50
-        cost_wood = 00
-        if self.resources[0] >= cost_gold and self.resources[1] >= cost_wood:
-            self.resources[0] -= cost_gold
-            self.resources[1] -= cost_wood
-            self.resources[3] += 1 # Add building
-            return 0.1 # Positive reward for successful investment
-        else:
-            reward -= 0.5 
-            return reward # Penalty for trying to build without resources
     
     def process_economy(self, num_soldiers: int, num_mines: int) -> float:
         """
@@ -141,3 +120,11 @@ class PlayerEnv:
     @resources.setter
     def resources(self, value):
         self._resources = np.maximum(value, 0)
+
+    @property
+    def capacity(self) -> np.ndarray:
+        return self._capacity
+    
+    @capacity.setter
+    def capacity(self, value):
+        self._capacity = np.maximum(value, 0)

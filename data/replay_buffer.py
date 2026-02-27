@@ -13,20 +13,20 @@ class ReplayBuffer:
         self.board_states = np.zeros((capacity, 5, 8, 8), dtype=np.float32)
         self.next_board_states = np.zeros((capacity, 5, 8, 8), dtype=np.float32)
         
-        # Full Stats: = 15
+        # Full Stats: = 16
         # Increased to 10 to be safe and scalable
-        self.stats_dim = 15
+        self.stats_dim = 20
         self.stats = np.zeros((capacity, self.stats_dim), dtype=np.float32)
         self.next_stats = np.zeros((capacity, self.stats_dim), dtype=np.float32)
 
         self.actions_diplomacy = np.zeros((capacity,), dtype=np.int64)
-        self.actions_economy = np.zeros((capacity, 3), dtype=np.int64) 
+        self.actions_economy = np.zeros((capacity, 4), dtype=np.int64) 
         self.actions_distribution = np.zeros((capacity,), dtype=np.int64)
         self.actions_target = np.zeros((capacity,), dtype=np.int64)
         
         # Masking: We now store two masks: Target (64) and Build (7)
         self.masks_target = np.ones((capacity, 64), dtype=np.bool_)
-        self.masks_build = np.ones((capacity, 7), dtype=np.bool_)
+        self.masks_build = np.ones((capacity, 8), dtype=np.bool_)
 
         self.rewards = np.zeros((capacity,), dtype=np.float32)
         self.terminated = np.zeros((capacity,), dtype=np.bool_)
@@ -37,7 +37,7 @@ class ReplayBuffer:
         self.returns = np.zeros((capacity,), dtype=np.float32)
     
     def _extract_stats(self, obs: Dict) -> np.ndarray:
-            # Extract all 4 stats from the new board_stats key
+            # Extract all 7 stats from the new board_stats key
             mine_count = obs["board_stats"][0]
             mine_cap   = obs["board_stats"][1]
             gold_inc   = obs["board_stats"][2] 
@@ -45,9 +45,11 @@ class ReplayBuffer:
             trade_routes_count = obs["board_stats"][4]
             owned_tiles = obs["board_stats"][5]
             net_income = obs["board_stats"][6]
+            potential_mines = obs["board_stats"][7]
+            potential_trade_routes = obs["board_stats"][8]
             
             return np.concatenate([
-                obs["player_resources"],    # [0,1,2,3]
+                obs["player_resources"],    # [0,1,2,3,4,5,6]
                 obs["opponent_resources"],  # [4,5,6]
                 [mine_count],               # [7]
                 [mine_cap],                 # [8]
@@ -56,6 +58,8 @@ class ReplayBuffer:
                 [trade_routes_count],
                 [owned_tiles],
                 [net_income],
+                [potential_mines],
+                [potential_trade_routes],   # [11] <- New
                 [obs["turn_number"]]        # [11] <- Moves to index 11
             ]).astype(np.float32)
 
@@ -76,7 +80,7 @@ class ReplayBuffer:
         # Store both masks from the info dict
         if info:
             self.masks_target[self.idx] = info.get("action_mask", np.ones(64)).flatten()
-            self.masks_build[self.idx] = info.get("build_mask", np.ones(6)).flatten()
+            self.masks_build[self.idx] = info.get("build_mask", np.ones(8)).flatten()
 
         self.rewards[self.idx] = reward
         self.terminated[self.idx] = terminated
@@ -91,10 +95,10 @@ class ReplayBuffer:
             def get_dict(stats_array, board_array):
                 return {
                     "board_state": torch.from_numpy(board_array[idxs]),
-                    "player_resources": torch.from_numpy(stats_array[idxs, 0:4]),
-                    "opponent_resources": torch.from_numpy(stats_array[idxs, 4:7]),
-                    "mine_stats": torch.from_numpy(stats_array[idxs, 7:11]), # Updated 7:9 to 7:11 (includes income)
-                    "turn_number": torch.from_numpy(stats_array[idxs, 11:12]), # Updated 9:10 to 11:12
+                    "player_resources": torch.from_numpy(stats_array[idxs, 0:7]),
+                    "opponent_resources": torch.from_numpy(stats_array[idxs, 7:10]),
+                    "mine_stats": torch.from_numpy(stats_array[idxs, 10:19]), # Updated 7:9 to 7:11 (includes income)
+                    "turn_number": torch.from_numpy(stats_array[idxs, 19:20]), # Updated 9:10 to 11:12
                     "full_stats": torch.from_numpy(stats_array[idxs]) 
                 }
 

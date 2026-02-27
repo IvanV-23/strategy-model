@@ -52,36 +52,45 @@ def visualize_agent():
 
         # 4. Prepare inputs
         with torch.no_grad():
-            # Board State: [1, 4, 8, 8]
             board_tensor = torch.as_tensor(obs["board_state"], dtype=torch.float32).unsqueeze(0)
-            b_stats = torch.as_tensor(obs["board_stats"], dtype=torch.float32).flatten()
-
-            # Global Stats: Combine resources and turn into [1, 9]
+            
+            # --- UPDATE: Verify your stats concatenation matches training_step ---
             p_res = torch.as_tensor(obs["player_resources"], dtype=torch.float32).flatten()
             o_res = torch.as_tensor(obs["opponent_resources"], dtype=torch.float32).flatten()
+            m_stats = torch.as_tensor(obs["board_stats"], dtype=torch.float32).flatten()
             turn = torch.as_tensor([obs["turn_number"]], dtype=torch.float32)
-            stats_tensor = torch.cat([p_res, o_res, turn, b_stats]).unsqueeze(0)
+            
+            # Ensure this order matches your _process_obs exactly!
+            stats_tensor = torch.cat([p_res, o_res, m_stats, turn]).unsqueeze(0)
 
-            # 5. Model Inference
-            # eco_logits is a tuple: (sol_logits, mine_logits, trade_logits)
-            dip_l, eco_logits, dist_l, tar_l, _ = model(board_tensor, stats_tensor)
-            sol_l, mine_l, trade_l = eco_logits # Unpack the 3 components
+            # --- UPDATE: Handle Build Mask ---
+            b_mask = info.get("build_mask", np.ones(8)) # Size 8 now
+            b_mask_tensor = torch.as_tensor(b_mask, dtype=torch.bool).unsqueeze(0)
+
+            # 5. Model Inference (Pass build_mask to the actor for internal masking)
+            dip_l, eco_logits, dist_l, tar_l, _ = model(
+                board_tensor, 
+                stats_tensor, 
+                build_mask=b_mask_tensor
+            )
+            
+            # UPDATE: Unpack 4 components
+            sol_l, mine_l, trade_l, wh_l = eco_logits 
         
-            # 6. Apply Action Masking
-            mask = info.get("action_mask", None)
-            if mask is not None:
-                mask_tensor = torch.as_tensor(mask, dtype=torch.bool)
-                # Ensure mask is applied to the batch dimension [1, 64]
-                tar_l = tar_l.masked_fill(~mask_tensor.unsqueeze(0), -1e10)
+            # 6. Apply Target Masking
+            t_mask = info.get("action_mask", None)
+            if t_mask is not None:
+                t_mask_tensor = torch.as_tensor(t_mask, dtype=torch.bool)
+                tar_l = tar_l.masked_fill(~t_mask_tensor.unsqueeze(0), -1e10)
 
             # 7. Action Selection (Greedy/Argmax)
-            # Economy is handled by taking the max of both heads and combining into a list
             action = {
                 "diplomacy": torch.argmax(dip_l, dim=1).item(),
                 "economy": np.array([
                     torch.argmax(sol_l, dim=1).item(),
                     torch.argmax(mine_l, dim=1).item(),
-                    torch.argmax(trade_l, dim=1).item()
+                    torch.argmax(trade_l, dim=1).item(),
+                    torch.argmax(wh_l, dim=1).item() # NEW: Warehouse action
                 ], dtype=np.int64),
                 "distribution": torch.argmax(dist_l, dim=1).item(),
                 "target_tile": torch.argmax(tar_l, dim=1).item()
@@ -90,11 +99,10 @@ def visualize_agent():
         # 8. Step environment
         obs, reward, terminated, truncated, info = env.step(action)
 
-        # Slow down the visualization so humans can actually see the moves
         time.sleep(0.1) 
 
         if terminated or truncated:
-            print(f"Episode Finished. Reward: {reward:.2f}. Resetting...")
+            print(f"Episode Finished. Resetting...")
             obs, info = env.reset()
             time.sleep(1.0) 
             

@@ -1,7 +1,7 @@
 import numpy as np
 
 from enviroment.enviroment_blocks.board_blocks.trade_route_manager_env import TradeRouteManager
-
+from enviroment.enviroment_blocks.board_blocks.buildings_manager_env import BuildingsManager
 class BoardEnv:
     def __init__(self, rows=8, cols=8):
         #Board
@@ -10,13 +10,14 @@ class BoardEnv:
         
         
         # Index 0: Owner (0=None, 1=P1, 2=P2)
-        # Index 1: Status (e.g., 1=Building/Base)
+        # Index 1: Status (e.g., 1=Building, 2=Warehouse, 3=Base)
         # Index 2: Soldiers (number of units on this specific tile)
         # Index 3: Resource Value (The static value of the tile)
         self.grid = np.zeros((rows, cols, 4), dtype=np.int32)
 
-        #Trade routes
+        #Managers
         self.p1_trade_manager = TradeRouteManager(base_coords=(0, 0))
+        self.p1_buildings_manager = BuildingsManager(self.grid, rows, cols)
 
     def reset(self):
             # Reset everything 
@@ -26,8 +27,8 @@ class BoardEnv:
             self.grid[:, :, 3] = resource_layer
             
             # Set starting positions
-            self.grid[0, 0, :3] = [1, 1, 10]
-            self.grid[self.rows-1, self.cols-1, :3] = [2, 1, 10]
+            self.grid[0, 0, :3] = [1, 3, 10]
+            self.grid[self.rows-1, self.cols-1, :3] = [2, 3, 10]
 
             #Generate new resources
             self._generate_resources()
@@ -36,6 +37,10 @@ class BoardEnv:
             self.p1_trade_manager.active_routes = []
 
             return self.grid
+
+    def update_board(self):
+
+        self.p1_buildings_manager.update_board(self.grid, self.rows, self.cols)
 
     def get_tile_data(self):
         """
@@ -274,6 +279,7 @@ class BoardEnv:
 
     def get_owned_tiles(self, owner_id):
             return np.sum(self.grid[:, :, 0] == owner_id)
+    
     def get_tile_ownership(self):
             return self.grid[:, :, 0]
     
@@ -313,18 +319,28 @@ class BoardEnv:
             # 4. Transpose to (5, 8, 8)
             return combined.transpose(2, 0, 1).astype(np.int32)
 
+
+    def get_potencial_trade_routes(self) -> int:
+        """
+        Returns the count of all tiles that have mines (potential trade route locations).
+        These are tiles where grid[:, :, 1] == 1 (mine status).
+        """
+        return int(self.p1_buildings_manager.get_mine_count(player_id=1)) - len(self.p1_trade_manager.active_routes)
+
     def get_board_state_and_stats(self)-> dict:
         # The spatial board as you already have it (5, 8, 8)
         spatial_board = self.full_board_state() 
         
         # The global stats vector (Scalable!)
         global_stats = np.array([
-            self.get_resource_tile_count(player_id=1),
-            self.get_mine_count(player_id=1),
+            self.p1_buildings_manager.get_resource_tile_count(player_id=1),
+            self.p1_buildings_manager.get_mine_count(player_id=1),
             self.collect_gold_income(player_id=1)+ self.get_owned_tiles(owner_id=1),
             self.collect_wood_income(player_id=1),
             len(self.p1_trade_manager.active_routes),
-            self.get_owned_tiles(owner_id=1)
+            self.get_owned_tiles(owner_id=1),
+            self.p1_buildings_manager.get_mine_count(player_id=1),
+            self.get_potencial_trade_routes()   
             # Future-proofing: add more here easily
             # self.get_gold_balance(player_id),
             # self.get_tech_level(player_id),
@@ -334,6 +350,7 @@ class BoardEnv:
             "visual": spatial_board,
             "stats": global_stats
         }
+    
     def get_action_mask(self, player_id):
         """
         Returns a 1D boolean array of size 64.
@@ -359,45 +376,67 @@ class BoardEnv:
 
     def get_build_mask(self, player_id: int, player_gold: int, player_wood: int) -> np.ndarray:
             """
-            Returns a mask of size 7:
-            Indices 0-5: Build Mine (Type 0: None, 1-5: Levels)
+            Returns a mask of size 8:
+            Indices 0-5: Build Mine (Type 0: None, 1: Level 1, 2-5: Reserved)
             Index 6: Create Trade Route
+            Index 7: Build Warehouse 
             """
-            # Initialize mask for 6 mine actions + 1 trade route action = 7
-            mask = np.zeros(7, dtype=bool)
+            # Initialize mask for 8 actions (0-7)
+            mask = np.zeros(8, dtype=bool)
             
             # --- MINE LOGIC (Indices 0-5) ---
-            mask[0] = True # "Do Nothing" is always valid for mines
+            mask[0] = True # "Do Nothing" is always valid for the mine head
             
-            current_mines = self.get_mine_count(player_id)
-            resource_tiles = self.get_resource_tile_count(player_id)
+            current_mines = self.p1_buildings_manager.get_mine_count(player_id=player_id)
+            resource_tiles = self.p1_buildings_manager.get_resource_tile_count(player_id=player_id)
             
-            # Check if we have room and space for more mines
-            has_space = np.any((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] == 0) & (self.grid[:, :, 3] > 0))
+            # Check if we have room: Owned by player, No building, and has Wood resource
+            has_mine_space = np.any(
+                (self.grid[:, :, 0] == player_id) & 
+                (self.grid[:, :, 1] == 0) & 
+                (self.grid[:, :, 3] > 0)
+            )
             
-            if current_mines < resource_tiles and has_space:
-                mine_costs = [0, 50] # Costs for types 0-1
-                for i in range(1, 2):
-                    if player_gold >= mine_costs[i]:
-                        mask[i] = True
+            if current_mines < resource_tiles and has_mine_space:
+                mine_costs = [0, 50] # Cost for Level 1 Mine
+                if player_gold >= mine_costs[1]:
+                    mask[1] = True
 
             # --- TRADE ROUTE LOGIC (Index 6) ---
-            manager = self.p1_trade_manager if player_id == 1 else None # Add P2 logic if needed
+            manager = self.p1_trade_manager if player_id == 1 else None 
             if manager:
                 # Rule: Must have a mine that isn't already connected
-                all_mines = np.argwhere((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] > 0))
+                all_mines = np.argwhere((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] == 1))
                 
-                # Check if any mine position is not in active_routes
                 eligible_mines = [
                     tuple(pos) for pos in all_mines 
                     if tuple(pos) not in manager.active_routes and tuple(pos) != manager.base_coords
                 ]
                 
-                # If there's at least one unconnected mine and player can afford it (e.g., costs 30 gold)
-                route_cost = 0
+                route_cost = 0 # Adjust as needed
                 if len(eligible_mines) > 0 and player_gold >= route_cost:
                     mask[6] = True
-            
+
+            # --- WAREHOUSE LOGIC (Index 7) ---
+            warehouse_gold_cost = 50 
+            warehouse_wood_cost = 20
+            can_afford_wh = (player_gold >= warehouse_gold_cost and player_wood >= warehouse_wood_cost)
+
+            # Adjacency check for the mask
+            has_valid_adjacent_site = False
+            owned_coords = np.argwhere(self.grid[:, :, 0] == player_id)
+            potential_sites = [tuple(c) for c in owned_coords if self.grid[c[0], c[1], 1] == 0]
+
+            for r, c in potential_sites:
+                for nr, nc in self._get_neighbors(r, c):
+                    if self.grid[nr, nc, 1] == 1: # Neighbor must be a MINE (Status 1)
+                        has_valid_adjacent_site = True
+                        break
+                if has_valid_adjacent_site: break
+
+            if can_afford_wh and has_valid_adjacent_site:
+                mask[7] = True
+                
             return mask
 
     def collect_wood_income(self, player_id):
@@ -411,71 +450,6 @@ class BoardEnv:
         total_income = np.sum(self.grid[owned_mask, 3])
         return total_income
 
-#------ Additional methods for resource management, posibly a new class in the future ------
-
-    def get_resource_tile_count(self, player_id: int) -> int:
-        """
-        Returns the count of tiles owned by the player that have a 
-        resource value greater than 0 in Layer 3.
-        """
-        # Filter for tiles owned by this player (Layer 0)
-        owned_mask = (self.grid[:, :, 0] == player_id)
-        
-        # Filter for tiles that actually have resources generated (Layer 3)
-        has_resource_mask = (self.grid[:, :, 3] > 0)
-        
-        # The count of valid buildable spots currently owned
-        valid_spots = np.logical_and(owned_mask, has_resource_mask)
-        return int(np.sum(valid_spots))
-
-    def get_mine_count(self, player_id):
-        """
-        Returns the number of Mines (Status 2) currently owned by the player.
-        """
-        owned_mask = (self.grid[:, :, 0] == player_id)
-        is_mine_mask = (self.grid[:, :, 1] != 0) # Assuming 2 is the status for Mine
-        
-        player_mines = np.logical_and(owned_mask, is_mine_mask)
-        return np.sum(player_mines)
-
-    def build_mine(self, player_id, mine_type):
-            """
-            Attempts to build a specific mine type on a resource-rich tile.
-            """
-            # 1. Action 0 is "Do Nothing"
-            if mine_type == 0:
-                return True, "skipped"
-
-            # 2. Global Limit Check
-            current_mines = self.get_mine_count(player_id)
-            resource_tiles = self.get_resource_tile_count(player_id)
-            if current_mines >= resource_tiles:
-                return False, f"limit_reached_{current_mines}/{resource_tiles}"
-
-            # 3. Find a valid tile for the player
-            # UPDATED: We now check Owner (L0), No Building (L1), AND Resource Value > 0 (L3)
-            valid_tiles = np.argwhere(
-                (self.grid[:, :, 0] == player_id) & 
-                (self.grid[:, :, 1] == 0) & 
-                (self.grid[:, :, 3] > 0)
-            )
-
-            if len(valid_tiles) == 0:
-                # This is a critical fallback in case the mask and logic get out of sync
-                return False, "no_valid_resource_tiles_available"
-
-            # 4. Strategy: Which resource tile to pick?
-            # Option A: Pick the FIRST available (current behavior)
-            # r, c = valid_tiles[0]
-            
-            # Option B: Pick the tile with the HIGHEST resource value (Better for the Agent)
-            best_idx = np.argmax([self.grid[tr, tc, 3] for tr, tc in valid_tiles])
-            r, c = valid_tiles[best_idx]
-
-            # 5. Build the specific Mine Type
-            self.grid[r, c, 1] = mine_type 
-            
-            return True, f"built_type_{mine_type}_at_{r}_{c}"
 
 #------- methods for trade route management-----------
 
@@ -495,7 +469,7 @@ class BoardEnv:
             # We assume grid[r, c, 1] > 0 means a mine is present
             all_mines = np.argwhere(
                 (self.grid[:, :, 0] == player_id) & 
-                (self.grid[:, :, 1] > 0)
+                (self.grid[:, :, 1] == 1)
             )
 
             # 3. Filter for mines that do NOT have a route yet
@@ -535,3 +509,7 @@ class BoardEnv:
             print(f"Trade route income {trade_income}")
             
             return tile_income + trade_income
+
+#------- methods for warehouse management--------------
+
+

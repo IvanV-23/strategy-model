@@ -6,6 +6,7 @@ import numpy as np
 import pygame
 
 from enviroment.reward_env import RewardEnv
+from enviroment.enviroment_blocks.resources_manager_env import ResourceManager
 from enviroment.enviroment_blocks.opponent_env import OpponentEnv
 from enviroment.enviroment_blocks.player_env import PlayerEnv
 from enviroment.enviroment_render.strategy_renderer import StrategyRenderer
@@ -31,6 +32,8 @@ class StrategyEnv(gym.Env):
         self.board_env = BoardEnv()
         self.stats_env = StatsEnv(board_env=self.board_env,player_env=self.player_env)
         self.reward_env = RewardEnv(board_env=self.board_env,player_env=self.player_env)
+        self.resource_manager = ResourceManager(board_env=self.board_env, player_env=self.player_env)
+
 
         #Initiliaze enviroment branches
         self.diplomacy_branch = DiplomacyEnv(board_env=self.board_env,player_env=self.player_env,opponent_env=self.opponent_env)
@@ -63,7 +66,7 @@ class StrategyEnv(gym.Env):
 
         # Define the observation space
         self.observation_space = spaces.Dict({
-            "player_resources": spaces.Box(low=0, high=1000, shape=(4,), dtype=np.int32),
+            "player_resources": spaces.Box(low=0, high=1000, shape=(7,), dtype=np.int32),
             "opponent_resources": spaces.Box(low=0, high=1000, shape=(3,), dtype=np.int32), 
             "turn_number": spaces.Discrete(1000),
             "board_state": spaces.Box(low=0, high=255, shape=(5, 8, 8), dtype=np.int32),
@@ -84,7 +87,7 @@ class StrategyEnv(gym.Env):
 
     def _get_obs(self) -> Dict[str, np.ndarray]:
         return {
-            "player_resources": self.player_env.resources,
+            "player_resources": np.append(self.player_env.resources, self.player_env._capacity),
             "opponent_resources": self.opponent_env.resources, # Returns the (3,) array
             "turn_number": self.current_turn,
             "board_state": self.board_env.full_board_state(),  # Returns a (5, 8, 8) array
@@ -111,7 +114,8 @@ class StrategyEnv(gym.Env):
         self.soldiers_to_build = action["economy"][0]
         self.mines_to_build = action["economy"][1]
         self.trade_route_action = action["economy"][2]
-
+        self.warehouse_action = action["economy"][3]
+        
         # Distribution Head
         self.distribution_action = action["distribution"]
 
@@ -175,9 +179,9 @@ class StrategyEnv(gym.Env):
             self.board_env.redistribute_soldiers(owner_id=2, total_soldiers=p2_soldiers, style=0)
 
             # 1. Resource calculation 
-            player_resources_calculation_result = self.stats_env.calculate_player_resources()
+            player_resources_calculation_result = self.resource_manager.collect_resources(player_id=1)
 
-            reward += self.reward_env.calculate_player_resources_reward(game_turn = self.current_turn)
+            
             
             # 2. Store Actions for Rendering
             self._store_actions_for_rendering(action)
@@ -198,7 +202,8 @@ class StrategyEnv(gym.Env):
 
             economy_action_result = self.economy_branch.execute_economy_action(new_soldiers=self.soldiers_to_build,
                                                                                new_mines=self.mines_to_build,
-                                                                               trade_route_action=self.trade_route_action
+                                                                               trade_route_action=self.trade_route_action,
+                                                                               warehouse_action=self.warehouse_action
                                                                                )
 
             reward += economy_action_result["reward"]
@@ -249,7 +254,7 @@ class StrategyEnv(gym.Env):
                     reward += 0.1
 
             
-            self.player_env.resources[3] = int (self.board_env.get_mine_count(player_id=1))
+            self.player_env.resources[3] = int (self.board_env.p1_buildings_manager.get_mine_count(player_id=1))
 
             if self.player_env.resources[0] <= 0:
                 # Bankrupt condition
@@ -261,8 +266,14 @@ class StrategyEnv(gym.Env):
             if self.render_mode == "human":
                 self.render()
 
+            self.board_env.update_board()
+
             observation = self._get_obs()
             info = self._get_info()
+
+            reward += self.reward_env.calculate_player_resources_reward(game_turn = self.current_turn,
+                                                                        model_observations=observation,
+                                                                        player_resources_result=player_resources_calculation_result)
 
             return observation, reward, terminated, truncated, info
 
@@ -291,6 +302,7 @@ class StrategyEnv(gym.Env):
             "p1_base": self.board_env.p1_trade_manager.base_coords,
             "o1_base": (7,7),
             'history': self.history[-5:], 
+            "p1_capacity": self.player_env._capacity
             
         }
 
