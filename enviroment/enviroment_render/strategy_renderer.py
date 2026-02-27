@@ -3,15 +3,22 @@ import pygame
 import numpy as np
 import math
 
+BOARD_ROWS = 20  
+BOARD_COLS = 12
+CELL_SIZE = 45   # The pixel size of each tile
+UI_PANEL_HEIGHT = 220 # Space for resources at the top
+UI_PANEL_WIDTH = 250  # Space for infrastructure/logs
+
 class StrategyRenderer:
     def __init__(self, width, height, metadata):
-        self.width = width
-        self.height = height
+
+        self.width = (BOARD_COLS * CELL_SIZE) + (UI_PANEL_WIDTH * 2)
+        self.height = (BOARD_ROWS * CELL_SIZE) + UI_PANEL_HEIGHT
         self.metadata = metadata
         self.screen = None
         self.clock = None
         self.font = None
-        
+
         # Colors
         self.COLORS = {
             "bg": (20, 20, 25),
@@ -33,6 +40,8 @@ class StrategyRenderer:
             "base_accent": (50, 50, 50),    # Dark trim
             "base_flag": (255, 255, 0)      # Yellow flag/emblem
         }
+
+
 
     def _init_pygame(self, render_mode):
         if self.screen is None:
@@ -164,7 +173,7 @@ class StrategyRenderer:
 
     # --- RENDER LOGIC ---
 
-    def draw_board(self, board_data=None, routes=None, bases=None, target_index=None, rows=8, cols=8, cell_size=45):
+    def draw_board(self, board_data=None, routes=None, bases=None, target_index=None):
             """
             Complete Board Drawing Method with Layered Rendering:
             1. Background & Ownership
@@ -172,6 +181,10 @@ class StrategyRenderer:
             3. Resources, Buildings, and Soldiers
             4. Grid & Action Highlight
             """
+            # Use the constants
+            rows, cols = BOARD_ROWS, BOARD_COLS
+            cell_size = CELL_SIZE
+
             if board_data is not None:
                 rows, cols = len(board_data), len(board_data[0])
             
@@ -346,7 +359,7 @@ class StrategyRenderer:
             board_data=state_data.get('board'),
             target_index=state_data.get('target_act'),
             routes=(state_data.get('p1_routes'), state_data.get('o1_routes')),
-            bases=(state_data.get('p1_base'), state_data.get('o1_base'))
+            bases=(state_data.get('p1_base'), state_data.get('o1_base')),
         )
         
         # --- LOGS ---
