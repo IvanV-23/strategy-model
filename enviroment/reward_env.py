@@ -27,8 +27,8 @@ class RewardEnv:
         reward += self.player.capacity[0]*0.01
         reward += self.player.capacity[1]*0.01
 
-        reward -= player_resources_result["lost_gold"]*0.01
-        reward -= player_resources_result["lost_wood"]*0.01
+        reward -= player_resources_result["lost_gold"]*0.001
+        reward -= player_resources_result["lost_wood"]*0.001
 
         return reward
 

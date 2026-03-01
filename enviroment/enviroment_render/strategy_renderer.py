@@ -3,9 +3,9 @@ import pygame
 import numpy as np
 import math
 
-BOARD_ROWS = 20  
-BOARD_COLS = 12
-CELL_SIZE = 45   # The pixel size of each tile
+BOARD_ROWS = 16  
+BOARD_COLS = 16
+CELL_SIZE = 40   # Slightly smaller to fit on screen if needed
 UI_PANEL_HEIGHT = 220 # Space for resources at the top
 UI_PANEL_WIDTH = 250  # Space for infrastructure/logs
 

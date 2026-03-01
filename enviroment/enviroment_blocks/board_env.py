@@ -3,7 +3,7 @@ import numpy as np
 from enviroment.enviroment_blocks.board_blocks.trade_route_manager_env import TradeRouteManager
 from enviroment.enviroment_blocks.board_blocks.buildings_manager_env import BuildingsManager
 class BoardEnv:
-    def __init__(self, rows=8, cols=8):
+    def __init__(self, rows=16, cols=16):
         #Board
         self.rows = rows
         self.cols = cols
@@ -316,7 +316,7 @@ class BoardEnv:
                 resource_layer
             ], axis=2)
             
-            # 4. Transpose to (5, 8, 8)
+            # 4. Transpose to (5, rows, cols)
             return combined.transpose(2, 0, 1).astype(np.int32)
 
 
@@ -328,7 +328,7 @@ class BoardEnv:
         return int(self.p1_buildings_manager.get_mine_count(player_id=1)) - len(self.p1_trade_manager.active_routes)
 
     def get_board_state_and_stats(self)-> dict:
-        # The spatial board as you already have it (5, 8, 8)
+        # The spatial board as you already have it (5, rows, cols)
         spatial_board = self.full_board_state() 
         
         # The global stats vector (Scalable!)
@@ -353,11 +353,11 @@ class BoardEnv:
     
     def get_action_mask(self, player_id):
         """
-        Returns a 1D boolean array of size 64.
+        Returns a 1D boolean array of size rows*cols.
         True = Valid target for attack.
         False = Invalid target (already owned or not reachable).
         """
-        # 1. Initialize a flat mask of 64 zeros (8x8)
+        # 1. Initialize a flat mask of zeros
         mask = np.zeros(self.rows * self.cols, dtype=bool)
         
         # 2. Find all tiles owned by the player

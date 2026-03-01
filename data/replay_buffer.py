@@ -9,12 +9,12 @@ class ReplayBuffer:
         self.idx = 0
         self.size = 0
         
-        # Board: (Capacity, Channels, Height, Width)
-        self.board_states = np.zeros((capacity, 5, 8, 8), dtype=np.float32)
-        self.next_board_states = np.zeros((capacity, 5, 8, 8), dtype=np.float32)
+        # Board dimensions from observation space
+        board_shape = observation_space["board_state"].shape # (Channels, Rows, Cols)
+        self.board_states = np.zeros((capacity, *board_shape), dtype=np.float32)
+        self.next_board_states = np.zeros((capacity, *board_shape), dtype=np.float32)
         
-        # Full Stats: = 16
-        # Increased to 10 to be safe and scalable
+        # Full Stats: 20
         self.stats_dim = 20
         self.stats = np.zeros((capacity, self.stats_dim), dtype=np.float32)
         self.next_stats = np.zeros((capacity, self.stats_dim), dtype=np.float32)
@@ -24,8 +24,9 @@ class ReplayBuffer:
         self.actions_distribution = np.zeros((capacity,), dtype=np.int64)
         self.actions_target = np.zeros((capacity,), dtype=np.int64)
         
-        # Masking: We now store two masks: Target (64) and Build (7)
-        self.masks_target = np.ones((capacity, 64), dtype=np.bool_)
+        # Masking dimensions from action space and build mask
+        target_dim = action_space["target_tile"].n
+        self.masks_target = np.ones((capacity, target_dim), dtype=np.bool_)
         self.masks_build = np.ones((capacity, 8), dtype=np.bool_)
 
         self.rewards = np.zeros((capacity,), dtype=np.float32)
@@ -79,7 +80,8 @@ class ReplayBuffer:
         
         # Store both masks from the info dict
         if info:
-            self.masks_target[self.idx] = info.get("action_mask", np.ones(64)).flatten()
+            target_dim = self.masks_target.shape[1]
+            self.masks_target[self.idx] = info.get("action_mask", np.ones(target_dim)).flatten()
             self.masks_build[self.idx] = info.get("build_mask", np.ones(8)).flatten()
 
         self.rewards[self.idx] = reward

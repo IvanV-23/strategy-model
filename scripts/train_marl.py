@@ -258,7 +258,7 @@ def train_agent_lightning():
         gradient_clip_val=1.0,
         precision="16-mixed", 
         logger=MLFlowLogger(experiment_name="MARL_Strategy_Optimized", tracking_uri="file:./ml-runs"),
-        callbacks=[EarlyStopping(monitor='loss/total', patience=100, mode='min')],
+        callbacks=[EarlyStopping(monitor='loss/total', patience=50, mode='min')],
         log_every_n_steps=10,
         limit_train_batches=10 # Optimize updates per collection
     )

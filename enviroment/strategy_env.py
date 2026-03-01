@@ -52,9 +52,9 @@ class StrategyEnv(gym.Env):
 
         ## 0 means "Do nothing" for that specific unit
         self.diplomacy_action_space = spaces.Discrete(3)
-        self.economy_action_space = spaces.MultiDiscrete([10, 6, 6])  # [soldiers, mines, trade]
+        self.economy_action_space = spaces.MultiDiscrete([10, 6, 6, 2])  # [soldiers, mines, trade, warehouse]
         self.distribution_action_space = spaces.Discrete(5)
-        self.target_action_space = spaces.Discrete(64)  # Assuming a 8x8 board
+        self.target_action_space = spaces.Discrete(256)  # 16x16 board
         
         # Combined action space (Tuple of discrete actions)
         self.action_space = spaces.Dict({
@@ -69,8 +69,8 @@ class StrategyEnv(gym.Env):
             "player_resources": spaces.Box(low=0, high=1000, shape=(7,), dtype=np.int32),
             "opponent_resources": spaces.Box(low=0, high=1000, shape=(3,), dtype=np.int32), 
             "turn_number": spaces.Discrete(1000),
-            "board_state": spaces.Box(low=0, high=255, shape=(5, 8, 8), dtype=np.int32),
-            "board_stats": spaces.Box(low=0, high=1, shape=(6,), dtype=np.float32),
+            "board_state": spaces.Box(low=0, high=255, shape=(5, 16, 16), dtype=np.int32),
+            "board_stats": spaces.Box(low=0, high=1, shape=(9,), dtype=np.float32),
         })
 
         self.current_turn = 0
@@ -90,7 +90,7 @@ class StrategyEnv(gym.Env):
             "player_resources": np.append(self.player_env.resources, self.player_env._capacity),
             "opponent_resources": self.opponent_env.resources, # Returns the (3,) array
             "turn_number": self.current_turn,
-            "board_state": self.board_env.full_board_state(),  # Returns a (5, 8, 8) array
+            "board_state": self.board_env.full_board_state(),  # Returns a (5, 16, 16) array
             "board_stats": self.stats_env.get_game_stats()
         }
 
@@ -121,8 +121,8 @@ class StrategyEnv(gym.Env):
 
         # Target Head
         target_idx = action["target_tile"]
-        self.target_row = target_idx // 8
-        self.target_col = target_idx % 8
+        self.target_row = target_idx // self.board_env.cols
+        self.target_col = target_idx % self.board_env.cols
 
 
         reward = 0.0
@@ -300,7 +300,7 @@ class StrategyEnv(gym.Env):
             "p1_routes": self.board_env.p1_trade_manager.active_routes,
             "o1_routes": [], 
             "p1_base": self.board_env.p1_trade_manager.base_coords,
-            "o1_base": (7,7),
+            "o1_base": (self.board_env.rows - 1, self.board_env.cols - 1),
             'history': self.history[-5:], 
             "p1_capacity": self.player_env._capacity
             
