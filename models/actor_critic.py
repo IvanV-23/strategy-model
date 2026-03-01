@@ -47,20 +47,20 @@ class Actor(nn.Module):
 
         if build_mask is not None:
             # Mine Masking 
-            mines_logits = mines_logits.masked_fill(~build_mask[:, :3].bool(), -1e9)
+            mines_logits = mines_logits.masked_fill(~build_mask[:, :3].bool(), -1e4)
             
             # Trade Masking (Index 6)
             # We treat trade_logits as binary (0: skip, 1: build)
             # We only mask index 1 (the 'build' action)
             trade_mask = torch.ones_like(trade_logits).bool()
             trade_mask[:, 1] = build_mask[:, 6].bool() 
-            trade_logits = trade_logits.masked_fill(~trade_mask, -1e9)
+            trade_logits = trade_logits.masked_fill(~trade_mask, -1e4)
 
             # 3. NEW: Warehouse Masking 
             # Assuming build_mask index 7 represents "Can build warehouse"
             wh_mask = torch.ones_like(warehouse_logits).bool()
             wh_mask[:, 1] = build_mask[:, 7].bool() # Mask index 1 (the 'build' action)
-            warehouse_logits = warehouse_logits.masked_fill(~wh_mask, -1e9)
+            warehouse_logits = warehouse_logits.masked_fill(~wh_mask, -1e4)
 
         # --- DIPLOMACY & DISTRIBUTION ---
         dip_logits = self.diplomacy_head(common)
@@ -69,7 +69,7 @@ class Actor(nn.Module):
         # --- TARGET HEAD ---
         target_logits = self.target_head(features).reshape(batch_size, -1)
         if target_mask is not None:
-            target_logits = target_logits.masked_fill(~target_mask.bool(), -1e9)
+            target_logits = target_logits.masked_fill(~target_mask.bool(), -1e4)
 
         return dip_logits, (soldiers_logits, mines_logits, trade_logits, warehouse_logits), dist_logits, target_logits
 
