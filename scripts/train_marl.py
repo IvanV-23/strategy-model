@@ -40,14 +40,14 @@ class StrategyLightningModule(pl.LightningModule):
         self.lam = lam
         
         # Hyperparameters
-        self.entropy_coeff = 0.1
-        self.entropy_decay = 0.998 # Slower decay
-        self.min_entropy = 0.05    # Higher minimum entropy to maintain exploration
-        self.value_loss_coeff = 0.5
+        self.entropy_coeff = 0.01
+        self.entropy_decay = 0.99 # Slower decay
+        self.min_entropy = 0.001    # Higher minimum entropy to maintain exploration
+        self.value_loss_coeff = 0.1
         self.reward_scaling_factor = 1e-1
 
         # MARL Model initialization
-        self.model = MARL_Strategy(in_channels=5, stats_dim=20)
+        self.model = MARL_Strategy(in_channels=5, stats_dim=23)
         
         # Optimize model if not on Windows (torch.compile is better supported on Linux)
         if hasattr(torch, "compile") and sys.platform != "win32":
@@ -61,7 +61,7 @@ class StrategyLightningModule(pl.LightningModule):
         self.save_hyperparameters(ignore=['env', 'buffer', 'model'])
 
     @torch.no_grad()
-    def _process_obs(self, obs_batch, info_batch=None):
+    def _process_obs(self, obs_batch, info_batch=None, log=True):
         device = self.device
         if "board_stats" in obs_batch: # Single step collection
             boards = torch.from_numpy(obs_batch["board_state"]).to(device, dtype=torch.float32, non_blocking=True).unsqueeze(0) / 255.0
@@ -87,15 +87,69 @@ class StrategyLightningModule(pl.LightningModule):
                 t_mask = info_batch[0].to(device, dtype=torch.bool, non_blocking=True)
                 b_mask = info_batch[1].to(device, dtype=torch.bool, non_blocking=True)
 
+        # --- Logging ---
+        if log and "player_resources" in obs_batch:
+            res = torch.as_tensor(obs_batch["player_resources"], dtype=torch.float32)
+            if res.dim() == 1:
+                self.log("game_stats/player_gold", res[0])
+                self.log("game_stats/player_wood", res[1])
+                self.log("game_stats/player_soldiers", res[2])
+                self.log("game_stats/player_mines", res[3])
+                self.log("game_stats/gold_capacity", res[4])
+                self.log("game_stats/wood_capacity", res[5])
+                self.log("game_stats/soldier_capacity", res[6])
+            else:
+                self.log("game_stats/player_gold", res[:, 0].mean())
+                self.log("game_stats/player_wood", res[:, 1].mean())
+                self.log("game_stats/player_soldiers", res[:, 2].mean())
+                self.log("game_stats/player_mines", res[:, 3].mean())
+                self.log("game_stats/gold_capacity", res[:, 4].mean())  
+                self.log("game_stats/wood_capacity", res[:, 5].mean())
+                self.log("game_stats/soldier_capacity", res[:, 6].mean())
+        
+        # In batch mode, board_stats info is in 'mine_stats'
+        stats_raw = obs_batch.get("board_stats") if "board_stats" in obs_batch else obs_batch.get("mine_stats")
+        if log and stats_raw is not None:
+            stats_raw = torch.as_tensor(stats_raw, dtype=torch.float32)
+            if stats_raw.dim() > 1:
+                self.log("game_stats/mines", stats_raw[:, 1].mean())
+                self.log("game_stats/gold_income", stats_raw[:, 2].mean())
+                self.log("game_stats/wood_income", stats_raw[:, 3].mean())
+                self.log("game_stats/trade_routes", stats_raw[:, 4].mean())
+                self.log("game_stats/p1_tiles", stats_raw[:, 5].mean())
+                self.log("game_stats/p2_tiles", stats_raw[:, 6].mean())
+                self.log("game_stats/potential_trade_routes", stats_raw[:, 7].mean())
+                self.log("game_stats/net_income", stats_raw[:, 8].mean())
+                self.log("game_stats/lost_gold", stats_raw[:, 9].mean())
+                self.log("game_stats/lost_wood", stats_raw[:, 10].mean())
+                self.log("game_stats/defeated_soldiers", stats_raw[:, 11].mean())
+            else:
+                self.log("game_stats/mines", stats_raw[1])
+                self.log("game_stats/gold_income", stats_raw[2])
+                self.log("game_stats/wood_income", stats_raw[3])
+                self.log("game_stats/trade_routes", stats_raw[4])
+                self.log("game_stats/p1_tiles", stats_raw[5])
+                self.log("game_stats/p2_tiles", stats_raw[6])
+                self.log("game_stats/potential_trade_routes", stats_raw[7])
+                self.log("game_stats/net_income", stats_raw[8])
+                self.log("game_stats/lost_gold", stats_raw[9])
+                self.log("game_stats/lost_wood", stats_raw[10])
+                self.log("game_stats/defeated_soldiers", stats_raw[11])
+
         return boards, stats, t_mask, b_mask
 
     def _compute_gae(self, trajectory, last_obs, last_info, start_idx):
         rewards = np.array([e['reward'] for e in trajectory]) * self.reward_scaling_factor
+
+        # 2. APPLY REWARD
+        # This prevents bankruptcy (-1.94) from being an extreme outlier
+        rewards = np.clip(rewards, -5.0, 5.0)
+
         values = np.array([e['value'] for e in trajectory])
         dones = np.array([e['done'] for e in trajectory])
         
         with torch.no_grad():
-            b, s, tm, bm = self._process_obs(last_obs, last_info)
+            b, s, tm, bm = self._process_obs(last_obs, last_info, log=False)
             res = self.model(b, s, tm, bm)
             next_value = res["value"].item()
 
@@ -117,7 +171,7 @@ class StrategyLightningModule(pl.LightningModule):
 
         print(f"Pre-filling buffer with {self.batch_size} steps...")
         while self.buffer.size < self.batch_size:
-            board_t, stats_t, t_mask, b_mask = self._process_obs(self.obs, self.info)
+            board_t, stats_t, t_mask, b_mask = self._process_obs(self.obs, self.info, log=False)
             with torch.no_grad():
                 res = self.model(board_t, stats_t, target_mask=t_mask, build_mask=b_mask)
             
@@ -189,10 +243,15 @@ class StrategyLightningModule(pl.LightningModule):
 
         boards, stats, t_mask, b_mask = self._process_obs(states, (m_target, m_build))
         res = self.model(boards, stats, target_mask=t_mask, build_mask=b_mask)
-
-        res_gold = states["player_resources"][:, 0].mean()
-        self.log("game_stats/player_gold", res_gold, on_step=False, on_epoch=True)
-
+        def stabilize_logits(logits):
+                # Replace NaNs with 0.0 and clamp to prevent Exp(logits) from exploding
+                logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
+                return torch.clamp(logits, min=-20, max=20)
+        
+        res["dip"] = stabilize_logits(res["dip"])
+        res["eco"] = [stabilize_logits(l) for l in res["eco"]]
+        res["mil"] = [stabilize_logits(l) for l in res["mil"]]
+        
         adv = (pre_adv - pre_adv.mean()) / (pre_adv.std() + 1e-8)
 
         # Vectorized distribution operations
@@ -245,7 +304,7 @@ class StrategyLightningModule(pl.LightningModule):
 
 def train_agent_lightning():
     # Performance setup
-    BATCH_SIZE, BUFFER_CAP, COLLECT_STEPS, EPOCHS, LR = 128, 10000, 1024, 1000, 5e-5
+    BATCH_SIZE, BUFFER_CAP, COLLECT_STEPS, EPOCHS, LR = 128, 10000, 1024, 1000, 3e-5
     torch.set_float32_matmul_precision('high')
 
     env = StrategyEnv()
@@ -255,12 +314,12 @@ def train_agent_lightning():
 
     trainer = pl.Trainer(
         max_epochs=EPOCHS,
-        gradient_clip_val=1.0,
+        gradient_clip_val=0.5,
         precision="16-mixed", 
         logger=MLFlowLogger(experiment_name="MARL_Strategy_Optimized", tracking_uri="file:./ml-runs"),
-        callbacks=[EarlyStopping(monitor='loss/total', patience=50, mode='min')],
+        callbacks=[EarlyStopping(monitor='loss/total', patience=100, mode='min')],
         log_every_n_steps=10,
-        limit_train_batches=10 # Optimize updates per collection
+        limit_train_batches=100 # Optimize updates per collection
     )
 
     trainer.fit(model)

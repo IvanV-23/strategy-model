@@ -18,7 +18,7 @@ def visualize_marl_agent():
 
     # 2. Model Initialization
     # MARL model with the same dimensions used in train_marl.py
-    model = MARL_Strategy(in_channels=5, stats_dim=20)
+    model = MARL_Strategy(in_channels=5, stats_dim=23)
     
     # 3. Load Weights
     model_path = "marl_strategy_optimized.pth"

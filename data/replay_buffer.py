@@ -14,8 +14,8 @@ class ReplayBuffer:
         self.board_states = np.zeros((capacity, *board_shape), dtype=np.float32)
         self.next_board_states = np.zeros((capacity, *board_shape), dtype=np.float32)
         
-        # Full Stats: 20
-        self.stats_dim = 20
+        # Full Stats: 23
+        self.stats_dim = 23
         self.stats = np.zeros((capacity, self.stats_dim), dtype=np.float32)
         self.next_stats = np.zeros((capacity, self.stats_dim), dtype=np.float32)
 
@@ -38,30 +38,11 @@ class ReplayBuffer:
         self.returns = np.zeros((capacity,), dtype=np.float32)
     
     def _extract_stats(self, obs: Dict) -> np.ndarray:
-            # Extract all 7 stats from the new board_stats key
-            mine_count = obs["board_stats"][0]
-            mine_cap   = obs["board_stats"][1]
-            gold_inc   = obs["board_stats"][2] 
-            wood_inc   = obs["board_stats"][3] 
-            trade_routes_count = obs["board_stats"][4]
-            owned_tiles = obs["board_stats"][5]
-            net_income = obs["board_stats"][6]
-            potential_mines = obs["board_stats"][7]
-            potential_trade_routes = obs["board_stats"][8]
-            
             return np.concatenate([
-                obs["player_resources"],    # [0,1,2,3,4,5,6]
-                obs["opponent_resources"],  # [4,5,6]
-                [mine_count],               # [7]
-                [mine_cap],                 # [8]
-                [gold_inc],                 # [9]  <- New
-                [wood_inc],                 # [10] <- New
-                [trade_routes_count],
-                [owned_tiles],
-                [net_income],
-                [potential_mines],
-                [potential_trade_routes],   # [11] <- New
-                [obs["turn_number"]]        # [11] <- Moves to index 11
+                obs["player_resources"],
+                obs["opponent_resources"],
+                obs["board_stats"],
+                [obs["turn_number"]]
             ]).astype(np.float32)
 
     def add(self, state: Dict, action: Dict, reward: float, next_state: Dict, 
@@ -99,8 +80,8 @@ class ReplayBuffer:
                     "board_state": torch.from_numpy(board_array[idxs]),
                     "player_resources": torch.from_numpy(stats_array[idxs, 0:7]),
                     "opponent_resources": torch.from_numpy(stats_array[idxs, 7:10]),
-                    "mine_stats": torch.from_numpy(stats_array[idxs, 10:19]), # Updated 7:9 to 7:11 (includes income)
-                    "turn_number": torch.from_numpy(stats_array[idxs, 19:20]), # Updated 9:10 to 11:12
+                    "mine_stats": torch.from_numpy(stats_array[idxs, 10:22]), 
+                    "turn_number": torch.from_numpy(stats_array[idxs, 22:23]), 
                     "full_stats": torch.from_numpy(stats_array[idxs]) 
                 }
 

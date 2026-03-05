@@ -37,9 +37,9 @@ class StrategyLightningModule(pl.LightningModule):
         self.gamma = gamma
         self.batch_size = batch_size
         self.lam = lam
-        self.entropy_coeff = 0.1  # Start much higher
-        self.entropy_decay = 0.995 # Slowly reduce exploration as it gets better
-        self.min_entropy = 0.01
+        self.entropy_coeff = 0.02  # Start much higher
+        self.entropy_decay = 0.99 # Slowly reduce exploration as it gets better
+        self.min_entropy = 0.005
         self.value_loss_coeff = 0.05  # Reduced from 0.5 to balance high Critic loss
         self.reward_scaling_factor = 1e-3 # Scale rewards down (e.g., -100,000 becomes -100)
 

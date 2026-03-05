@@ -70,7 +70,7 @@ class StrategyEnv(gym.Env):
             "opponent_resources": spaces.Box(low=0, high=1000, shape=(3,), dtype=np.int32), 
             "turn_number": spaces.Discrete(1000),
             "board_state": spaces.Box(low=0, high=255, shape=(5, 16, 16), dtype=np.int32),
-            "board_stats": spaces.Box(low=0, high=1, shape=(9,), dtype=np.float32),
+            "board_stats": spaces.Box(low=0, high=1000, shape=(12,), dtype=np.float32),
         })
 
         self.current_turn = 0
@@ -91,7 +91,11 @@ class StrategyEnv(gym.Env):
             "opponent_resources": self.opponent_env.resources, # Returns the (3,) array
             "turn_number": self.current_turn,
             "board_state": self.board_env.full_board_state(),  # Returns a (5, 16, 16) array
-            "board_stats": self.stats_env.get_game_stats()
+            "board_stats": self.stats_env.get_game_stats(
+                lost_gold=getattr(self, 'lost_gold', 0),
+                lost_wood=getattr(self, 'lost_wood', 0),
+                defeated_soldiers=getattr(self, 'defeated_soldiers', 0)
+            )
         }
 
     def _get_info(self) -> Dict[str, Any]:
@@ -157,6 +161,10 @@ class StrategyEnv(gym.Env):
 
         self.board_env.reset()
 
+        self.lost_gold = 0
+        self.lost_wood = 0
+        self.defeated_soldiers = 0
+
 
         if self.render_mode == "human":
             self.render()
@@ -180,6 +188,9 @@ class StrategyEnv(gym.Env):
 
             # 1. Resource calculation 
             player_resources_calculation_result = self.resource_manager.collect_resources(player_id=1)
+            self.lost_gold = player_resources_calculation_result.get("lost_gold", 0)
+            self.lost_wood = player_resources_calculation_result.get("lost_wood", 0)
+            self.defeated_soldiers = 0
 
             
             
@@ -196,6 +207,7 @@ class StrategyEnv(gym.Env):
 
             truncated = action_result["truncated"]
             reward += action_result["reward"]
+            self.defeated_soldiers += action_result.get("defeated_soldiers", 0)
             self.history.append(action_result["history"])
 
             # 4. --- ECONOMY BRANCH ---
@@ -224,7 +236,7 @@ class StrategyEnv(gym.Env):
 
             if intent_to_attack:
                 # The Board determines if the attack succeeds based on soldier proximity
-                battle_victory, base_captured, prev_owner, defeated_soldiers, mine_captured = self.board_env.claim_adjacent_tile(owner_id=2)
+                battle_victory, base_captured, prev_owner, defeated_by_opponent, mine_captured = self.board_env.claim_adjacent_tile(owner_id=2)
                 
                 if battle_victory:
                     print("Opponent captured a tile!")
@@ -232,13 +244,10 @@ class StrategyEnv(gym.Env):
                     self.opponent_env.resources[0] += 5
                     self.opponent_env.resources[1] += 2
                     
-                    # P1 Loses resources for losing a tile
-                    #self.player_env.resources[0] = max(0, self.player_env.resources[0] - 50)
-                    #self.player_env.resources[1] = max(0, self.player_env.resources[1] - 25)
-          
-                    #if prev_owner == 1:
-                        #if self.board_env.get_owned_tiles(owner_id=2) > self.board_env.get_owned_tiles(owner_id=1):
-                            #reward -= 0.02  # Penalty for losing a tile to opponent
+                    # Deduct the actual soldiers lost on the tile from Player 1's total pool
+                    if prev_owner == 1:
+                        self.player_env.resources[2] = int(max(0, self.player_env.resources[2] - defeated_by_opponent))
+        
                     if mine_captured:
                         print("Mine captured")
                         reward -= 0.1

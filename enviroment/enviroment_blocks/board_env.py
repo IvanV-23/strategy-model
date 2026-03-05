@@ -131,6 +131,7 @@ class BoardEnv:
             # --- CAPTURE STATE BEFORE OVERWRITING ---
             previous_owner = int(self.grid[target_r, target_c, 0])
             target_structure = int(self.grid[target_r, target_c, 1])
+            defeated_soldiers = int(self.grid[target_r, target_c, 2])
             
             # Check if a mine was lost (assuming Structure ID 2 is a Mine)
             if previous_owner != 0 and target_structure != 0:
@@ -144,7 +145,7 @@ class BoardEnv:
             self.grid[target_r, target_c, 2] = 1 # Occupy with 1 soldier
             
             # Return the new 5th variable: mine_was_lost
-            return True, truncated, previous_owner, final_attack_power, mine_was_lost
+            return True, truncated, previous_owner, defeated_soldiers, mine_was_lost
         
         return False, False, None, 0, False
 
@@ -212,12 +213,25 @@ class BoardEnv:
         
         # Reserve 1 soldier per tile first to maintain ownership
         remaining_soldiers = total_soldiers - num_tiles
+        SOLDIER_LIMIT = 50
+        base_coords = (0, 0) if owner_id == 1 else (self.rows - 1, self.cols - 1)
+        excess_soldiers = 0
         
         if remaining_soldiers > 0:
             # Distribute the "extra" soldiers based on the calculated probabilities
             extra_allocations = np.random.multinomial(remaining_soldiers, probs)
             for i, (r, c) in enumerate(owned_indices):
-                self.grid[r, c, 2] = 1 + extra_allocations[i]
+                total_on_tile = 1 + extra_allocations[i]
+                
+                # Check limit (Base has no limit)
+                if (r, c) != base_coords and total_on_tile > SOLDIER_LIMIT:
+                    excess_soldiers += (total_on_tile - SOLDIER_LIMIT)
+                    self.grid[r, c, 2] = SOLDIER_LIMIT
+                else:
+                    self.grid[r, c, 2] = total_on_tile
+            
+            # All overflow units go to the base
+            self.grid[base_coords[0], base_coords[1], 2] += excess_soldiers
         else:
             # Just 1 soldier per tile if we are at the limit
             for r, c in owned_indices:
@@ -333,17 +347,15 @@ class BoardEnv:
         
         # The global stats vector (Scalable!)
         global_stats = np.array([
-            self.p1_buildings_manager.get_resource_tile_count(player_id=1),
-            self.p1_buildings_manager.get_mine_count(player_id=1),
-            self.collect_gold_income(player_id=1)+ self.get_owned_tiles(owner_id=1),
-            self.collect_wood_income(player_id=1),
-            len(self.p1_trade_manager.active_routes),
-            self.get_owned_tiles(owner_id=1),
-            self.p1_buildings_manager.get_mine_count(player_id=1),
-            self.get_potencial_trade_routes()   
+            self.p1_buildings_manager.get_resource_tile_count(player_id=1), # 0
+            self.p1_buildings_manager.get_mine_count(player_id=1),          # 1
+            self.collect_gold_income(player_id=1),                         # 2: Just gold income
+            self.collect_wood_income(player_id=1),                         # 3
+            len(self.p1_trade_manager.active_routes),                      # 4
+            self.get_owned_tiles(owner_id=1),                              # 5: P1 owned tiles
+            self.get_owned_tiles(owner_id=2),                              # 6: P2 owned tiles (Replaced duplicate)
+            self.get_potencial_trade_routes()                              # 7
             # Future-proofing: add more here easily
-            # self.get_gold_balance(player_id),
-            # self.get_tech_level(player_id),
         ], dtype=np.float32)
         
         return {

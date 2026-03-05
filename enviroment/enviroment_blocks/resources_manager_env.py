@@ -44,20 +44,25 @@ class ResourceManager:
         gold_expenses = self._get_gold_expenses()
         self.player_env.gold_net_income = gold_income - gold_expenses
 
-        #Add reosources while there is capacity, otherwise calculate lost resources
-        self.player_env._resources[0] = min(self.player_env._resources[0]+self.player_env.gold_net_income,
-                                        self.player_env.capacity[0])
-        
-        if self.player_env._resources[0]+self.player_env.gold_net_income > self.player_env.capacity[0]:
-            lost_gold = self.player_env._resources[0]+self.player_env.gold_net_income - self.player_env.capacity[0]
+        total_gold = self.player_env._resources[0] + self.player_env.gold_net_income
+        if total_gold > self.player_env.capacity[0]:
+            lost_gold = total_gold - self.player_env.capacity[0]
             print(f"Lost Gold: {lost_gold}")
+            self.player_env.gold_net_income = self.player_env.capacity[0] - self.player_env._resources[0]
+            self.player_env._resources[0] = self.player_env.capacity[0]
+            
+        else:
+            self.player_env._resources[0] = total_gold
 
         self.player_env.wood_raw_income = self._get_wood_income(player_id=player_id)
 
-        if self.player_env._resources[1]+self.player_env.wood_raw_income > self.player_env.capacity[1]:
-            lost_wood = self.player_env._resources[1]+self.player_env.wood_raw_income - self.player_env.capacity[1]
+        total_wood = self.player_env._resources[1] + self.player_env.wood_raw_income
+        if total_wood > self.player_env.capacity[1]:
+            lost_wood = total_wood - self.player_env.capacity[1]
             print(f"Lost Wood: {lost_wood}")
-
-        self.player_env._resources[1] = min(self.player_env._resources[1]+self.player_env.wood_raw_income, self.player_env.capacity[1])
+            self.player_env.wood_raw_income = self.player_env.capacity[1] - self.player_env._resources[1]
+            self.player_env._resources[1] = self.player_env.capacity[1]
+        else:
+            self.player_env._resources[1] = total_wood
 
         return {"status":"ok", "lost_gold": lost_gold, "lost_wood": lost_wood}

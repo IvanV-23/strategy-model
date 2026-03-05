@@ -8,11 +8,11 @@ class StatsEnv:
         self.player = player_env
         self.board = board_env
     
-    def get_game_stats(self)->dict:
+    def get_game_stats(self, lost_gold: float = 0, lost_wood: float = 0, defeated_soldiers: int = 0)->dict:
         
         board_stats = self.board.get_board_state_and_stats()["stats"]
 
-        global_stats = np.append(board_stats, self.player.gold_net_income).astype(np.float32)
+        global_stats = np.append(board_stats, [self.player.gold_net_income, lost_gold, lost_wood, defeated_soldiers]).astype(np.float32)
 
         return global_stats
          

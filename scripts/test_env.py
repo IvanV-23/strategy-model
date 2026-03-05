@@ -28,10 +28,8 @@ def test_environment():
 
     for i in range(10): # Run for 10 steps
         print(f"\n--- Step {i+1} ---")
-        # Sample random actions for both diplomacy and economy branches
-        diplomacy_action = env.action_space["diplomacy"].sample()
-        economy_action = env.action_space["economy"].sample()
-        action = {"diplomacy": diplomacy_action, "economy": economy_action}
+        # Sample random actions from the action space
+        action = env.action_space.sample()
 
         print("Action taken:", action)
 
