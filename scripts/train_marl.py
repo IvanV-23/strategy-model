@@ -47,7 +47,7 @@ class StrategyLightningModule(pl.LightningModule):
         self.reward_scaling_factor = 1e-1
 
         # MARL Model initialization
-        self.model = MARL_Strategy(in_channels=5, stats_dim=23)
+        self.model = MARL_Strategy(in_channels=5, stats_dim=27)
         
         # Optimize model if not on Windows (torch.compile is better supported on Linux)
         if hasattr(torch, "compile") and sys.platform != "win32":
@@ -93,19 +93,23 @@ class StrategyLightningModule(pl.LightningModule):
             if res.dim() == 1:
                 self.log("game_stats/player_gold", res[0])
                 self.log("game_stats/player_wood", res[1])
-                self.log("game_stats/player_soldiers", res[2])
+                self.log("game_stats/player_workers", res[2])
                 self.log("game_stats/player_mines", res[3])
-                self.log("game_stats/gold_capacity", res[4])
-                self.log("game_stats/wood_capacity", res[5])
-                self.log("game_stats/soldier_capacity", res[6])
+                self.log("game_stats/player_food", res[4])
+                self.log("game_stats/gold_capacity", res[5])
+                self.log("game_stats/wood_capacity", res[6])
+                self.log("game_stats/worker_capacity", res[7])
+                self.log("game_stats/food_capacity", res[8])
             else:
                 self.log("game_stats/player_gold", res[:, 0].mean())
                 self.log("game_stats/player_wood", res[:, 1].mean())
-                self.log("game_stats/player_soldiers", res[:, 2].mean())
+                self.log("game_stats/player_workers", res[:, 2].mean())
                 self.log("game_stats/player_mines", res[:, 3].mean())
-                self.log("game_stats/gold_capacity", res[:, 4].mean())  
-                self.log("game_stats/wood_capacity", res[:, 5].mean())
-                self.log("game_stats/soldier_capacity", res[:, 6].mean())
+                self.log("game_stats/player_food", res[:, 4].mean())
+                self.log("game_stats/gold_capacity", res[:, 5].mean())  
+                self.log("game_stats/wood_capacity", res[:, 6].mean())
+                self.log("game_stats/worker_capacity", res[:, 7].mean())
+                self.log("game_stats/food_capacity", res[:, 8].mean())
         
         # In batch mode, board_stats info is in 'mine_stats'
         stats_raw = obs_batch.get("board_stats") if "board_stats" in obs_batch else obs_batch.get("mine_stats")
@@ -119,10 +123,12 @@ class StrategyLightningModule(pl.LightningModule):
                 self.log("game_stats/p1_tiles", stats_raw[:, 5].mean())
                 self.log("game_stats/p2_tiles", stats_raw[:, 6].mean())
                 self.log("game_stats/potential_trade_routes", stats_raw[:, 7].mean())
-                self.log("game_stats/net_income", stats_raw[:, 8].mean())
-                self.log("game_stats/lost_gold", stats_raw[:, 9].mean())
-                self.log("game_stats/lost_wood", stats_raw[:, 10].mean())
-                self.log("game_stats/defeated_soldiers", stats_raw[:, 11].mean())
+                self.log("game_stats/crop_fields", stats_raw[:, 8].mean())
+                self.log("game_stats/net_income", stats_raw[:, 9].mean())
+                self.log("game_stats/lost_gold", stats_raw[:, 10].mean())
+                self.log("game_stats/lost_wood", stats_raw[:, 11].mean())
+                self.log("game_stats/lost_food", stats_raw[:, 12].mean())
+                self.log("game_stats/defeated_workers", stats_raw[:, 13].mean())
             else:
                 self.log("game_stats/mines", stats_raw[1])
                 self.log("game_stats/gold_income", stats_raw[2])
@@ -131,10 +137,12 @@ class StrategyLightningModule(pl.LightningModule):
                 self.log("game_stats/p1_tiles", stats_raw[5])
                 self.log("game_stats/p2_tiles", stats_raw[6])
                 self.log("game_stats/potential_trade_routes", stats_raw[7])
-                self.log("game_stats/net_income", stats_raw[8])
-                self.log("game_stats/lost_gold", stats_raw[9])
-                self.log("game_stats/lost_wood", stats_raw[10])
-                self.log("game_stats/defeated_soldiers", stats_raw[11])
+                self.log("game_stats/crop_fields", stats_raw[8])
+                self.log("game_stats/net_income", stats_raw[9])
+                self.log("game_stats/lost_gold", stats_raw[10])
+                self.log("game_stats/lost_wood", stats_raw[11])
+                self.log("game_stats/lost_food", stats_raw[12])
+                self.log("game_stats/defeated_workers", stats_raw[13])
 
         return boards, stats, t_mask, b_mask
 
@@ -185,7 +193,8 @@ class StrategyLightningModule(pl.LightningModule):
                     torch.distributions.Categorical(logits=eco_l[0]).sample().item(),
                     torch.distributions.Categorical(logits=eco_l[1]).sample().item(),
                     torch.distributions.Categorical(logits=eco_l[2]).sample().item(),
-                    torch.distributions.Categorical(logits=eco_l[3]).sample().item()
+                    torch.distributions.Categorical(logits=eco_l[3]).sample().item(),
+                    torch.distributions.Categorical(logits=eco_l[4]).sample().item()
                 ],
                 "distribution": torch.distributions.Categorical(logits=mil_l[0]).sample().item(),
                 "target_tile": torch.distributions.Categorical(logits=mil_l[1]).sample().item()
@@ -218,7 +227,8 @@ class StrategyLightningModule(pl.LightningModule):
                     torch.distributions.Categorical(logits=eco_l[0]).sample().item(),
                     torch.distributions.Categorical(logits=eco_l[1]).sample().item(),
                     torch.distributions.Categorical(logits=eco_l[2]).sample().item(),
-                    torch.distributions.Categorical(logits=eco_l[3]).sample().item()
+                    torch.distributions.Categorical(logits=eco_l[3]).sample().item(),
+                    torch.distributions.Categorical(logits=eco_l[4]).sample().item()
                 ],
                 "distribution": torch.distributions.Categorical(logits=mil_l[0]).sample().item(),
                 "target_tile": torch.distributions.Categorical(logits=mil_l[1]).sample().item()
@@ -256,26 +266,28 @@ class StrategyLightningModule(pl.LightningModule):
 
         # Vectorized distribution operations
         d_dip = torch.distributions.Categorical(logits=res["dip"])
-        d_sol = torch.distributions.Categorical(logits=res["eco"][0])
+        d_wor = torch.distributions.Categorical(logits=res["eco"][0])
         d_min = torch.distributions.Categorical(logits=res["eco"][1])
         d_tra = torch.distributions.Categorical(logits=res["eco"][2])
         d_wh  = torch.distributions.Categorical(logits=res["eco"][3])
+        d_cro = torch.distributions.Categorical(logits=res["eco"][4])
         d_mil = torch.distributions.Categorical(logits=res["mil"][0])
         d_tar = torch.distributions.Categorical(logits=res["mil"][1])
 
         lp = (d_dip.log_prob(a_dip) + 
-              d_sol.log_prob(a_eco[:, 0]) +
+              d_wor.log_prob(a_eco[:, 0]) +
               d_min.log_prob(a_eco[:, 1]) + 
               d_tra.log_prob(a_eco[:, 2]) + 
               d_wh.log_prob(a_eco[:, 3]) + 
+              d_cro.log_prob(a_eco[:, 4]) + 
               d_mil.log_prob(a_dist) + 
               d_tar.log_prob(a_target))
 
         actor_loss = -(lp * adv).mean()
         critic_loss = F.huber_loss(res["value"].view(-1), pre_returns.view(-1), delta=1.0)
         
-        entropy = (d_dip.entropy() + d_sol.entropy() + d_min.entropy() + 
-                   d_tra.entropy() + d_wh.entropy() + d_mil.entropy() + 
+        entropy = (d_dip.entropy() + d_wor.entropy() + d_min.entropy() + 
+                   d_tra.entropy() + d_wh.entropy() + d_cro.entropy() + d_mil.entropy() + 
                    d_tar.entropy()).mean()
 
         total_loss = actor_loss + (self.value_loss_coeff * critic_loss) - (self.entropy_coeff * entropy)
@@ -317,7 +329,7 @@ def train_agent_lightning():
         gradient_clip_val=0.5,
         precision="16-mixed", 
         logger=MLFlowLogger(experiment_name="MARL_Strategy_Optimized", tracking_uri="file:./ml-runs"),
-        callbacks=[EarlyStopping(monitor='loss/total', patience=100, mode='min')],
+        callbacks=[EarlyStopping(monitor='loss/total', patience=50, mode='min')],
         log_every_n_steps=10,
         limit_train_batches=100 # Optimize updates per collection
     )

@@ -18,7 +18,7 @@ def visualize_marl_agent():
 
     # 2. Model Initialization
     # MARL model with the same dimensions used in train_marl.py
-    model = MARL_Strategy(in_channels=5, stats_dim=23)
+    model = MARL_Strategy(in_channels=5, stats_dim=27)
     
     # 3. Load Weights
     model_path = "marl_strategy_optimized.pth"
@@ -79,7 +79,7 @@ def visualize_marl_agent():
                 build_mask=b_mask_tensor
             )
             
-            eco_l = res["eco"] # (soldiers, mines, trade, warehouse)
+            eco_l = res["eco"] # (workers, mines, trade, warehouse, crop)
             mil_l = res["mil"] # (dist, target)
             dip_l = res["dip"]
 
@@ -90,7 +90,8 @@ def visualize_marl_agent():
                     torch.argmax(eco_l[0], dim=1).item(),
                     torch.argmax(eco_l[1], dim=1).item(),
                     torch.argmax(eco_l[2], dim=1).item(),
-                    torch.argmax(eco_l[3], dim=1).item()
+                    torch.argmax(eco_l[3], dim=1).item(),
+                    torch.argmax(eco_l[4], dim=1).item()
                 ],
                 "distribution": torch.argmax(mil_l[0], dim=1).item(),
                 "target_tile": torch.argmax(mil_l[1], dim=1).item()

@@ -21,7 +21,7 @@ class Actor(nn.Module):
         # UPDATE: Changed from +8 to +10 for the new stats vector
         self.fc_common = nn.Linear((64 * board_size) + 20, 256)
 
-        # SINGLE HEAD for Economy: size is (eco_dim * 3) -> [Soldiers, Mines, Trade]
+        # SINGLE HEAD for Economy: size is (eco_dim * 3) -> [Workers, Mines, Trade]
         self.economy_head = economy_head.EconomyHead(
                                     input_dim=256, 
                                     sol_dim=10,   # 10
@@ -43,7 +43,7 @@ class Actor(nn.Module):
         common = F.relu(self.fc_common(combined))
 
         # --- ECONOMY HEAD ---
-        soldiers_logits, mines_logits, trade_logits, warehouse_logits = self.economy_head(common)
+        workers_logits, mines_logits, trade_logits, warehouse_logits = self.economy_head(common)
 
         if build_mask is not None:
             # Mine Masking 
@@ -71,7 +71,7 @@ class Actor(nn.Module):
         if target_mask is not None:
             target_logits = target_logits.masked_fill(~target_mask.bool(), -1e4)
 
-        return dip_logits, (soldiers_logits, mines_logits, trade_logits, warehouse_logits), dist_logits, target_logits
+        return dip_logits, (workers_logits, mines_logits, trade_logits, warehouse_logits), dist_logits, target_logits
 
 class Critic(nn.Module):
     def __init__(self, board_size: int = 64):

@@ -103,14 +103,14 @@ class StrategyLightningModule(pl.LightningModule):
             # We take the mean across the batch dimension (dim 0) 
             # and then select the specific resource index.
 
-            # Assuming index 0 is Gold, 1 is Wood, 2 is Soldiers
+            # Assuming index 0 is Gold, 1 is Wood, 2 is Workers
             if "player_resources" in obs_batch:
                 # Handle batch from ReplayBuffer (2D) vs Single Step (1D)
                 res = torch.as_tensor(obs_batch["player_resources"], dtype=torch.float32)
                 if res.dim() == 1:
                     self.log("game_stats/player_gold", res[0])
                     self.log("game_stats/player_wood", res[1])
-                    self.log("game_stats/player_soldiers", res[2])
+                    self.log("game_stats/player_workers", res[2])
                     self.log("game_stats/player_mines", res[3])
                     self.log("game_stats/gold_capacity", res[4])
                     self.log("game_stats/wood_capacity", res[5])
@@ -119,7 +119,7 @@ class StrategyLightningModule(pl.LightningModule):
                     # Log the average across the current training batch
                     self.log("game_stats/player_gold", res[:, 0].mean())
                     self.log("game_stats/player_wood", res[:, 1].mean())
-                    self.log("game_stats/player_soldiers", res[:, 2].mean())
+                    self.log("game_stats/player_workers", res[:, 2].mean())
                     self.log("game_stats/player_mines", res[:, 3].mean())
                     self.log("game_stats/gold_capacity", res[:, 4].mean())  
                     self.log("game_stats/wood_capacity", res[:, 5].mean())

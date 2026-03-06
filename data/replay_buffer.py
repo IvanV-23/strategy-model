@@ -14,20 +14,20 @@ class ReplayBuffer:
         self.board_states = np.zeros((capacity, *board_shape), dtype=np.float32)
         self.next_board_states = np.zeros((capacity, *board_shape), dtype=np.float32)
         
-        # Full Stats: 23
-        self.stats_dim = 23
+        # Full Stats: 27
+        self.stats_dim = 27
         self.stats = np.zeros((capacity, self.stats_dim), dtype=np.float32)
         self.next_stats = np.zeros((capacity, self.stats_dim), dtype=np.float32)
 
         self.actions_diplomacy = np.zeros((capacity,), dtype=np.int64)
-        self.actions_economy = np.zeros((capacity, 4), dtype=np.int64) 
+        self.actions_economy = np.zeros((capacity, 5), dtype=np.int64) 
         self.actions_distribution = np.zeros((capacity,), dtype=np.int64)
         self.actions_target = np.zeros((capacity,), dtype=np.int64)
         
         # Masking dimensions from action space and build mask
         target_dim = action_space["target_tile"].n
         self.masks_target = np.ones((capacity, target_dim), dtype=np.bool_)
-        self.masks_build = np.ones((capacity, 8), dtype=np.bool_)
+        self.masks_build = np.ones((capacity, 9), dtype=np.bool_)
 
         self.rewards = np.zeros((capacity,), dtype=np.float32)
         self.terminated = np.zeros((capacity,), dtype=np.bool_)
@@ -78,10 +78,10 @@ class ReplayBuffer:
             def get_dict(stats_array, board_array):
                 return {
                     "board_state": torch.from_numpy(board_array[idxs]),
-                    "player_resources": torch.from_numpy(stats_array[idxs, 0:7]),
-                    "opponent_resources": torch.from_numpy(stats_array[idxs, 7:10]),
-                    "mine_stats": torch.from_numpy(stats_array[idxs, 10:22]), 
-                    "turn_number": torch.from_numpy(stats_array[idxs, 22:23]), 
+                    "player_resources": torch.from_numpy(stats_array[idxs, 0:9]),
+                    "opponent_resources": torch.from_numpy(stats_array[idxs, 9:12]),
+                    "mine_stats": torch.from_numpy(stats_array[idxs, 12:26]), 
+                    "turn_number": torch.from_numpy(stats_array[idxs, 26:27]), 
                     "full_stats": torch.from_numpy(stats_array[idxs]) 
                 }
 

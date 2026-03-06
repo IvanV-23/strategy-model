@@ -21,7 +21,7 @@ def visualize_agent():
 
     model = StrategyActorCritic(
         action_dim_dip=env.action_space["diplomacy"].n,
-        action_dim_eco=eco_dims[0],        # Usually 11 if 0-10 soldiers
+        action_dim_eco=eco_dims[0],        # Usually 11 if 0-10 workers
         action_dim_dist=env.action_space["distribution"].n,
         action_dim_target=env.action_space["target_tile"].n,
         board_size=64 
@@ -75,7 +75,7 @@ def visualize_agent():
             )
             
             # UPDATE: Unpack 4 components
-            sol_l, mine_l, trade_l, wh_l = eco_logits 
+            wor_l, mine_l, trade_l, wh_l = eco_logits 
         
             # 6. Apply Target Masking
             t_mask = info.get("action_mask", None)
@@ -87,7 +87,7 @@ def visualize_agent():
             action = {
                 "diplomacy": torch.argmax(dip_l, dim=1).item(),
                 "economy": np.array([
-                    torch.argmax(sol_l, dim=1).item(),
+                    torch.argmax(wor_l, dim=1).item(),
                     torch.argmax(mine_l, dim=1).item(),
                     torch.argmax(trade_l, dim=1).item(),
                     torch.argmax(wh_l, dim=1).item() # NEW: Warehouse action

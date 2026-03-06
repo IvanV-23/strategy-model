@@ -119,6 +119,38 @@ class BuildingsManager:
         self.grid[target_r, target_c, 1] = 2  # Status 2 = Warehouse
         return True, f"warehouse_built_at_{target_r}_{target_c}"
 
+    def build_crop_field(self, player_id):
+        """
+            Finds an empty tile owned by player_id that is adjacent to 
+            an existing warehouse (status == 2) and builds a crop field.
+        """
+        # 1. Find all tiles owned by the player
+        owned_coords = np.argwhere(self.grid[:, :, 0] == player_id)
+        
+        # 2. Identify potential build sites: Owned, but no building (status == 0)
+        potential_sites = [tuple(coord) for coord in owned_coords if self.grid[coord[0], coord[1], 1] == 0]
+        
+        valid_sites = []
+        for r, c in potential_sites:
+            # Check neighbors for any existing warehouse or base
+            for nr, nc in self._get_neighbors(r, c):
+                if self.grid[nr, nc, 1] == 2 or self.grid[nr, nc, 1] == 3: # Warehouse or Base
+                    valid_sites.append((r, c))
+                    break
+        
+        if not valid_sites:
+            return False, "no_valid_adjacent_warehouses"
+
+        # 3. Build at the first valid site
+        target_r, target_c = valid_sites[0]
+        self.grid[target_r, target_c, 1] = 5  # Status 5 = Crop Field
+        return True, f"crop_field_built_at_{target_r}_{target_c}"
+
+    def get_crop_field_count(self, player_id):
+        owned_mask = (self.grid[:, :, 0] == player_id)
+        is_crop_mask = (self.grid[:, :, 1] == 5)
+        return int(np.sum(np.logical_and(owned_mask, is_crop_mask)))
+
     def update_mine(self, player_id):
         """
             Automatically selects an existing mine owned by player_id and updates it to a new mine type.

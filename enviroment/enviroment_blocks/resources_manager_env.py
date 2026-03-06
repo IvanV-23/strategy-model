@@ -20,10 +20,10 @@ class ResourceManager:
     
     def _get_gold_expenses(self):
         """
-            Calculate gold expenses based on soldiers and other upkeep costs.
+            Calculate gold expenses based on workers and other upkeep costs.
         """
-        soldier_upkeep = self.player_env._resources[2] * 0.005
-        return soldier_upkeep
+        worker_upkeep = self.player_env._resources[2] * 0.005
+        return worker_upkeep
 
     def _get_wood_income(self, player_id):
 
@@ -39,6 +39,7 @@ class ResourceManager:
         """
         lost_gold = 0
         lost_wood = 0
+        lost_food = 0
 
         gold_income = self._get_gold_income(player_id=player_id)
         gold_expenses = self._get_gold_expenses()
@@ -48,9 +49,7 @@ class ResourceManager:
         if total_gold > self.player_env.capacity[0]:
             lost_gold = total_gold - self.player_env.capacity[0]
             print(f"Lost Gold: {lost_gold}")
-            self.player_env.gold_net_income = self.player_env.capacity[0] - self.player_env._resources[0]
             self.player_env._resources[0] = self.player_env.capacity[0]
-            
         else:
             self.player_env._resources[0] = total_gold
 
@@ -60,9 +59,19 @@ class ResourceManager:
         if total_wood > self.player_env.capacity[1]:
             lost_wood = total_wood - self.player_env.capacity[1]
             print(f"Lost Wood: {lost_wood}")
-            self.player_env.wood_raw_income = self.player_env.capacity[1] - self.player_env._resources[1]
             self.player_env._resources[1] = self.player_env.capacity[1]
         else:
             self.player_env._resources[1] = total_wood
 
-        return {"status":"ok", "lost_gold": lost_gold, "lost_wood": lost_wood}
+        # Food Collection
+        self.player_env.food_raw_income = self.board_env.collect_food_income(player_id=player_id) + 25
+        total_food = self.player_env._resources[4] + self.player_env.food_raw_income
+        if total_food > self.player_env.capacity[3]:
+            lost_food = total_food - self.player_env.capacity[3]
+            print(f"Lost Food: {lost_food}")
+            self.player_env._resources[4] = self.player_env.capacity[3]
+        else:
+            self.player_env._resources[4] = total_food
+
+        return {"status":"ok", "lost_gold": lost_gold, "lost_wood": lost_wood, "lost_food": lost_food}
+    

@@ -17,9 +17,9 @@ A custom **Gymnasium** environment and **PyTorch** implementation of a strategic
 
 ### 1. Resources & Economy
 The agent manages four primary resource indices:
--   **Gold:** Used for building construction and soldier maintenance.
+-   **Gold:** Used for building construction and worker maintenance.
 -   **Wood:** Primary material used for building construction.
--   **Soldiers:** Required to win battles and expand territory.
+-   **Workers:** Required to win battles and expand territory.
 -   **Buildings:** Increases passive gold income per turn.
 
 ### 2. Action Space
@@ -30,11 +30,11 @@ The agent chooses two actions per turn (Multi-Discrete):
     -   `2`: Attack (Compares army strength vs enemy defense to capture tiles).
 -   **Economic Branch:**
     -   `0`: Gather (Increases Wood).
-    -   `1`: Create Units (Consumes gold, increases Soldiers).
+    -   `1`: Create Units (Consumes gold, increases Workers).
 
 ### 3. Territory & Combat
 -   **Expansion:** Territory grows from a starting "Anchor" tile.
--   **Battle Logic:** Success depends on your army size exceeding the opponent's defense (Base Defense + Soldiers).
+-   **Battle Logic:** Success depends on your army size exceeding the opponent's defense (Base Defense + Workers).
 -   **Victory Condition:** Capturing the enemy's starting base tile ends the episode with a massive reward.
 
 ---

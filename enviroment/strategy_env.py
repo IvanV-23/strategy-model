@@ -52,7 +52,7 @@ class StrategyEnv(gym.Env):
 
         ## 0 means "Do nothing" for that specific unit
         self.diplomacy_action_space = spaces.Discrete(3)
-        self.economy_action_space = spaces.MultiDiscrete([10, 6, 6, 2])  # [soldiers, mines, trade, warehouse]
+        self.economy_action_space = spaces.MultiDiscrete([10, 6, 6, 2, 2])  # [workers, mines, trade, warehouse, crop_field]
         self.distribution_action_space = spaces.Discrete(5)
         self.target_action_space = spaces.Discrete(256)  # 16x16 board
         
@@ -66,11 +66,11 @@ class StrategyEnv(gym.Env):
 
         # Define the observation space
         self.observation_space = spaces.Dict({
-            "player_resources": spaces.Box(low=0, high=1000, shape=(7,), dtype=np.int32),
+            "player_resources": spaces.Box(low=0, high=1000, shape=(9,), dtype=np.int32),
             "opponent_resources": spaces.Box(low=0, high=1000, shape=(3,), dtype=np.int32), 
             "turn_number": spaces.Discrete(1000),
             "board_state": spaces.Box(low=0, high=255, shape=(5, 16, 16), dtype=np.int32),
-            "board_stats": spaces.Box(low=0, high=1000, shape=(12,), dtype=np.float32),
+            "board_stats": spaces.Box(low=0, high=1000, shape=(14,), dtype=np.float32),
         })
 
         self.current_turn = 0
@@ -94,7 +94,8 @@ class StrategyEnv(gym.Env):
             "board_stats": self.stats_env.get_game_stats(
                 lost_gold=getattr(self, 'lost_gold', 0),
                 lost_wood=getattr(self, 'lost_wood', 0),
-                defeated_soldiers=getattr(self, 'defeated_soldiers', 0)
+                lost_food=getattr(self, 'lost_food', 0),
+                defeated_workers=getattr(self, 'defeated_workers', 0)
             )
         }
 
@@ -115,10 +116,11 @@ class StrategyEnv(gym.Env):
         #Economy Head
         # Directly extract counts
         # action["economy"] is now an array like [3, 0]
-        self.soldiers_to_build = action["economy"][0]
+        self.workers_to_build = action["economy"][0]
         self.mines_to_build = action["economy"][1]
         self.trade_route_action = action["economy"][2]
         self.warehouse_action = action["economy"][3]
+        self.crop_field_action = action["economy"][4]
         
         # Distribution Head
         self.distribution_action = action["distribution"]
@@ -163,7 +165,8 @@ class StrategyEnv(gym.Env):
 
         self.lost_gold = 0
         self.lost_wood = 0
-        self.defeated_soldiers = 0
+        self.lost_food = 0
+        self.defeated_workers = 0
 
 
         if self.render_mode == "human":
@@ -178,19 +181,19 @@ class StrategyEnv(gym.Env):
             
             # 0. Action Extraction
             reward,terminated, truncated = self._action_extraction(action)
-            # 0.1 Soldiers redistribution
+            # 0.1 Workers redistribution
+            p1_workers = self.player_env.resources[2]
+            p2_workers = self.opponent_env.resources[2]
 
-            p1_soldiers = self.player_env.resources[2] 
-            p2_soldiers = self.opponent_env.resources[2]
-
-            self.board_env.redistribute_soldiers(owner_id=1, total_soldiers=p1_soldiers, style=self.distribution_action)
-            self.board_env.redistribute_soldiers(owner_id=2, total_soldiers=p2_soldiers, style=0)
+            self.board_env.redistribute_workers(owner_id=1, total_workers=p1_workers, style=self.distribution_action)
+            self.board_env.redistribute_workers(owner_id=2, total_workers=p2_workers, style=0)
+            
 
             # 1. Resource calculation 
             player_resources_calculation_result = self.resource_manager.collect_resources(player_id=1)
             self.lost_gold = player_resources_calculation_result.get("lost_gold", 0)
             self.lost_wood = player_resources_calculation_result.get("lost_wood", 0)
-            self.defeated_soldiers = 0
+            self.defeated_workers = 0
 
             
             
@@ -207,18 +210,23 @@ class StrategyEnv(gym.Env):
 
             truncated = action_result["truncated"]
             reward += action_result["reward"]
-            self.defeated_soldiers += action_result.get("defeated_soldiers", 0)
+            self.defeated_workers += action_result.get("defeated_workers", 0)
             self.history.append(action_result["history"])
 
             # 4. --- ECONOMY BRANCH ---
 
-            economy_action_result = self.economy_branch.execute_economy_action(new_soldiers=self.soldiers_to_build,
+            economy_action_result = self.economy_branch.execute_economy_action(new_workers=self.workers_to_build,
                                                                                new_mines=self.mines_to_build,
                                                                                trade_route_action=self.trade_route_action,
-                                                                               warehouse_action=self.warehouse_action
+                                                                               warehouse_action=self.warehouse_action,
+                                                                               crop_field_action=self.crop_field_action
                                                                                )
 
             reward += economy_action_result["reward"]
+
+            # Food Consumption
+            food_reward = self.player_env.process_food_consumption()
+            reward += food_reward
 
 
             # 5. Turn and Resource Management
@@ -228,14 +236,14 @@ class StrategyEnv(gym.Env):
             # reward -= self.opponent_env.score_calculation() + self.current_turn * 0.1 # Penalty for opponent strength
 
             # 7. Opponent Action
-            # First,redistribute opponent soldiers to the board so the attack power is correct
-            self.board_env.redistribute_soldiers(owner_id=2, total_soldiers=self.opponent_env.resources[2], style=0)
+            # First,redistribute opponent workers to the board so the attack power is correct
+            self.board_env.redistribute_workers(owner_id=2, total_workers=self.opponent_env.resources[2], style=0)
 
             # Get opponent's intent
             intent_to_attack = self.opponent_env.action_step(self.current_turn, self.board_env.get_owned_tiles(owner_id=2))
 
             if intent_to_attack:
-                # The Board determines if the attack succeeds based on soldier proximity
+                # The Board determines if the attack succeeds based on worker proximity
                 battle_victory, base_captured, prev_owner, defeated_by_opponent, mine_captured = self.board_env.claim_adjacent_tile(owner_id=2)
                 
                 if battle_victory:
@@ -244,7 +252,7 @@ class StrategyEnv(gym.Env):
                     self.opponent_env.resources[0] += 5
                     self.opponent_env.resources[1] += 2
                     
-                    # Deduct the actual soldiers lost on the tile from Player 1's total pool
+                    # Deduct the actual workers lost on the tile from Player 1's total pool
                     if prev_owner == 1:
                         self.player_env.resources[2] = int(max(0, self.player_env.resources[2] - defeated_by_opponent))
         
@@ -298,7 +306,8 @@ class StrategyEnv(gym.Env):
             'o_res': self.opponent_env.resources,
             'p_gen': (self.player_env.gold_net_income,
                       self.player_env.wood_raw_income,
-                      0),
+                      0,
+                      self.board_env.collect_food_income(player_id=1)),
             'o_gen': (1 + self.board_env.get_owned_tiles(owner_id=2) * 2,
                       1 + self.board_env.get_owned_tiles(owner_id=2),
                       0),
@@ -311,7 +320,9 @@ class StrategyEnv(gym.Env):
             "p1_base": self.board_env.p1_trade_manager.base_coords,
             "o1_base": (self.board_env.rows - 1, self.board_env.cols - 1),
             'history': self.history[-5:], 
-            "p1_capacity": self.player_env._capacity
+            "p1_capacity": self.player_env._capacity,
+            "p_warehouses": self.board_env.p1_buildings_manager.get_mines_by_owner_and_level(player_id=1, mine_level=2),
+            "p_crops": self.board_env.p1_buildings_manager.get_crop_field_count(player_id=1)
             
         }
 

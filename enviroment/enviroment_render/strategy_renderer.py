@@ -26,10 +26,10 @@ class StrategyRenderer:
             "gold_shadow": (184, 134, 11),
             "wood": (139, 69, 19),
             "wood_light": (160, 82, 45),
-            "opp_soldiers": (255, 80, 80),
+            "opp_workers": (255, 80, 80),
             "text": (240, 240, 240),
             "action": (0, 255, 255),
-            "player_soldiers": (200, 200, 200),
+            "player_workers": (200, 200, 200),
             "helmet_dark": (100, 100, 100),
             "mine": (200, 150, 255),
             "grid": (50, 50, 60),
@@ -38,7 +38,9 @@ class StrategyRenderer:
             "warehouse_roof": (100, 50, 30),
             "base": (200, 200, 200),        # Light stone/grey
             "base_accent": (50, 50, 50),    # Dark trim
-            "base_flag": (255, 255, 0)      # Yellow flag/emblem
+            "base_flag": (255, 255, 0),      # Yellow flag/emblem
+            "food": (150, 255, 100),
+            "crop_field": (100, 180, 50)
         }
 
 
@@ -171,6 +173,19 @@ class StrategyRenderer:
         small_pts = [(x+4, y+2), (x+9, y+4), (x+7, y+9), (x+2, y+7)]
         pygame.draw.polygon(self.screen, self.COLORS["mine_icon"], small_pts)
 
+    def _draw_crop_field_icon(self, x, y):
+        # Draw green stalks
+        for i in range(-8, 9, 4):
+            pygame.draw.line(self.screen, self.COLORS["food"], (x + i, y + 8), (x + i, y - 4), 2)
+            pygame.draw.circle(self.screen, (200, 255, 50), (x + i, y - 6), 2)
+
+    def _draw_food_icon(self, x, y):
+        # Draw a small stalk/wheat
+        pygame.draw.line(self.screen, self.COLORS["food"], (x, y + 8), (x, y - 8), 3)
+        for i in range(3):
+            pygame.draw.circle(self.screen, (220, 255, 100), (x - 4, y - 4 + i*4), 3)
+            pygame.draw.circle(self.screen, (220, 255, 100), (x + 4, y - 4 + i*4), 3)
+
     # --- RENDER LOGIC ---
 
     def draw_board(self, board_data=None, routes=None, bases=None, target_index=None):
@@ -178,7 +193,7 @@ class StrategyRenderer:
             Complete Board Drawing Method with Layered Rendering:
             1. Background & Ownership
             2. Trade Route Connections
-            3. Resources, Buildings, and Soldiers
+            3. Resources, Buildings, and Workers
             4. Grid & Action Highlight
             """
             # Use the constants
@@ -250,13 +265,17 @@ class StrategyRenderer:
                     elif status == 4: # Mine Lvl 2 (NEW)
                         self._draw_mine_lvl2_icon(rect.centerx, rect.centery)
                         level_txt = tiny_font.render("2", True, (0, 255, 100)) # Green '2' for high tier
-                        self.screen.blit(level_txt, (rect.centerx + 8, rect.centery + 2))        
-                    # 3. Soldiers
-                    if tile["soldiers"] > 0:
+                        self.screen.blit(level_txt, (rect.centerx + 8, rect.centery + 2))
+                    elif status == 5: # Crop Field (NEW)
+                        self._draw_crop_field_icon(rect.centerx, rect.centery)
+                        level_txt = tiny_font.render("F", True, (255, 255, 255))
+                        self.screen.blit(level_txt, (rect.centerx + 8, rect.centery + 2))
+                    # 3. Workers
+                    if tile["workers"] > 0:
                         txt_col = (255, 255, 255) if tile["owner"] != 0 else (120, 120, 130)
-                        soldier_surf = small_font.render(str(tile["soldiers"]), True, txt_col)
-                        text_rect = soldier_surf.get_rect(midbottom=(rect.centerx, rect.bottom - 2))
-                        self.screen.blit(soldier_surf, text_rect)
+                        worker_surf = small_font.render(str(tile["workers"]), True, txt_col)
+                        text_rect = worker_surf.get_rect(midbottom=(rect.centerx, rect.bottom - 2))
+                        self.screen.blit(worker_surf, text_rect)
 
                     # 4. Grid Lines
                     pygame.draw.rect(self.screen, self.COLORS["grid"], rect, 1)
@@ -309,28 +328,30 @@ class StrategyRenderer:
         # Unified loop for both sides to keep code clean
         sides = [
             ("PLAYER", p_box_rect, p_res, p_cap, p_gen, (100, 200, 255)),
-            ("OPPONENT", o_box_rect, o_res, o_cap, o_gen, self.COLORS["opp_soldiers"])
+            ("OPPONENT", o_box_rect, o_res, o_cap, o_gen, self.COLORS["opp_workers"])
         ]
 
         for label, box, res, cap, gen, title_col in sides:
             self.screen.blit(self.font.render(label, True, title_col), (box.x + 20, 50))
             
             rows = [
-                ("gold", res[0], cap[0], gen[0], 95),
-                ("wood", res[1], cap[1], gen[1], 130),
-                ("soldiers", res[2], cap[2], gen[2], 165)
+                ("gold", res[0], cap[0], gen[0], 85),
+                ("wood", res[1], cap[1], gen[1], 115),
+                ("workers", res[2], cap[2], gen[2], 145),
+                ("food", res[4] if len(res) > 4 else 0, cap[3] if len(cap) > 3 else 999, gen[3] if len(gen) > 3 else 0, 175)
             ]
 
             for type_key, val, maximum, income, y_pos in rows:
                 # Draw Icon
                 if type_key == "gold": self._draw_coin(box.x + 30, y_pos)
                 elif type_key == "wood": self._draw_wood(box.x + 30, y_pos)
+                elif type_key == "food": self._draw_food_icon(box.x + 30, y_pos)
                 else: self._draw_helmet(box.x + 30, y_pos, title_col)
                 
                 # Draw Text
                 res_text = f"{val}/{maximum}"
                 text_col = (255, 50, 50) if val >= maximum else self.COLORS.get(type_key, title_col)
-                if type_key == "soldiers": text_col = title_col # Use side-specific color for soldiers
+                if type_key == "workers": text_col = title_col # Use side-specific color for workers
                 
                 self.screen.blit(self.font.render(res_text, True, text_col), (box.x + 55, y_pos - 15))
                 self.screen.blit(gen_font.render(f"+{income}", True, gen_col), (box.x + 175, y_pos - 10))
@@ -353,6 +374,15 @@ class StrategyRenderer:
             wx = p_box_rect.x + 20 + ((i % 5) * 25)
             wy = p_box_rect.bottom + 110 + ((i // 5) * 25)
             self._draw_warehouse_icon(wx, wy)
+
+        # Crop Fields
+        crop_label = gen_font.render("CROP FIELDS", True, self.COLORS["food"])
+        self.screen.blit(crop_label, (p_box_rect.x + 10, p_box_rect.bottom + 155))
+        p_crops = state_data.get('p_crops', 0)
+        for i in range(int(p_crops)):
+            cx = p_box_rect.x + 20 + ((i % 5) * 25)
+            cy = p_box_rect.bottom + 180 + ((i // 5) * 25)
+            self._draw_crop_field_icon(cx, cy)
 
         # --- BOARD ---
         self.draw_board(

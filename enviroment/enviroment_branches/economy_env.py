@@ -8,10 +8,10 @@ class EconomyEnv:
         self.opponent = opponent_env
         self.board = board_env
 
-    def _build_soldiers(self, new_soldiers:int):
+    def _build_workers(self, new_workers:int):
         reward = 0
         eco_reward = self.player.process_economy(
-            num_soldiers=new_soldiers, 
+            num_workers=new_workers, 
             num_mines=0
         )
         reward += eco_reward
@@ -82,6 +82,7 @@ class EconomyEnv:
                     # Update player stats if you track warehouse counts
                     self.player.capacity[1] += 500 
                     self.player.capacity[0] += 250
+                    self.player.capacity[3] += 500 # Warehouse increases food capacity too!
                     print(f"Successfully built a warehouse. {msg}")
                     reward += 0.4  # Reward for expanding infrastructure
                 else:
@@ -92,21 +93,55 @@ class EconomyEnv:
                 reward -= 0.1
                 
             return reward
+
+    def _build_crop_field(self, crop_field_action: int):
+        """
+        crop_field_action: 1 to build, 0 to skip
+        """
+        reward = 0
+        if crop_field_action != 1:
+            return 0
+
+        # Define costs
+        gold_cost = 20
+        wood_cost = 10
+
+        # 1. Resource Check
+        if self.player.resources[0] >= gold_cost and self.player.resources[1] >= wood_cost:
+            # 2. Board Execution
+            success, msg = self.board.p1_buildings_manager.build_crop_field(player_id=1)
+
+            if success:
+                self.player.resources[0] -= gold_cost
+                self.player.resources[1] -= wood_cost
+                print(f"Successfully built a crop field. {msg}")
+                reward += 0.3  # Reward for food security
+            else:
+                print(f"Failed to build crop field: {msg}")
+                reward -= 0.05 
+        else:
+            print("Failed to build crop field: Insufficient resources.")
+            reward -= 0.1
+            
+        return reward
     
     def execute_economy_action(self,
-                                new_soldiers:int,
+                                new_workers:int,
                                 new_mines:int,
                                 trade_route_action:int,
-                                warehouse_action: int
+                                warehouse_action: int,
+                                crop_field_action: int = 0
                                 ):
 
-        reward = self._build_soldiers(new_soldiers)
+        reward = self._build_workers(new_workers)
 
-        reward = self._build_mines(new_mines)
+        reward += self._build_mines(new_mines)
 
-        reward = self._build_trade_routes(trade_route_action)
+        reward += self._build_trade_routes(trade_route_action)
 
         reward += self._build_warehouse(warehouse_action)
+
+        reward += self._build_crop_field(crop_field_action)
 
         return {"reward":reward}
 

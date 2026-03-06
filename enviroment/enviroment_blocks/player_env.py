@@ -5,23 +5,40 @@ import numpy as np
 class PlayerEnv:
     def __init__(self):
         self.reset()
-        self.SOLDIER_COST_GOLD = 10
-        self.SOLDIER_COST_WOOD = 5
+        self.WORKER_COST_GOLD = 10
+        self.WORKER_COST_WOOD = 5
         self.MINE_COST_GOLD = 50
         self.MINE_COST_WOOD = 20
         #######Per turn incomes##################
         self.gold_net_income = 0
         self.gold_raw_income = 0
         self.wood_raw_income = 0
+        self.food_raw_income = 0
         #######Player capacity###################
         
 
-    def reset(self, gold=100, wood=50, soldiers=5, gold_buildings=0):
+    def reset(self, gold=100, wood=50, workers=5, gold_buildings=0, food=50):
         """Initializes player resources."""
-        # Index 0: Gold, 1: Wood, 2: Soldiers, 3: Gold Buildings
-        self._resources = np.array([gold, wood, soldiers, gold_buildings], dtype=np.int32)
-        self._capacity = np.array([500, 500, 1000], dtype=np.int32)
+        # Index 0: Gold, 1: Wood, 2: Workers, 3: Gold Buildings, 4: Food
+        self._resources = np.array([gold, wood, workers, gold_buildings, food], dtype=np.int32)
+        # Index 0: Gold, 1: Wood, 2: Workers, 3: Food
+        self._capacity = np.array([500, 500, 1000, 500], dtype=np.int32)
         return self._resources
+
+    def process_food_consumption(self) -> float:
+        """
+        Workers consume food every turn. If food runs out, workers might be lost or penalty applied.
+        """
+        food_consumption = self._resources[2] * 0.1 # 1 food per worker
+        self._resources[4] = max(0, self._resources[4] - food_consumption)
+        
+        if self._resources[4] <= 0 and self._resources[2] > 0:
+            # Starvation penalty: lose 10% of workers if no food
+            lost_workers = max(1, int(self._resources[2] * 0.1))
+            self._resources[2] -= lost_workers
+            print(f"STARVATION: Lost {lost_workers} workers due to lack of food!")
+            return -0.5
+        return 0.0
 
     
     def process_battle_consequences(self, victory, base_captured, previous_owner, reason, player_tiles):
@@ -74,23 +91,23 @@ class PlayerEnv:
             return reward
 
     
-    def process_economy(self, num_soldiers: int, num_mines: int) -> float:
+    def process_economy(self, num_workers: int, num_mines: int) -> float:
         """
-        Processes the construction of soldiers and mines based on model counts.
-        num_soldiers: Count from MultiDiscrete[0]
+        Processes the construction of workers and mines based on model counts.
+        num_workers: Count from MultiDiscrete[0]
         num_mines: Count from MultiDiscrete[1]
         """
         reward = 0.0
         
         # 1. Calculate Total Costs
-        total_gold_needed = (num_soldiers * self.SOLDIER_COST_GOLD) + \
+        total_gold_needed = (num_workers * self.WORKER_COST_GOLD) + \
                             (num_mines * self.MINE_COST_GOLD)
         
-        total_wood_needed = (num_soldiers * self.SOLDIER_COST_WOOD) + \
+        total_wood_needed = (num_workers * self.WORKER_COST_WOOD) + \
                             (num_mines * self.MINE_COST_WOOD)
 
         # 2. Check Affordability
-        if num_soldiers == 0 and num_mines == 0:
+        if num_workers == 0 and num_mines == 0:
             return 0.0  # Idle turn, no reward/penalty
 
         if self._resources[0] >= total_gold_needed and self._resources[1] >= total_wood_needed:
@@ -98,12 +115,12 @@ class PlayerEnv:
             self._resources[0] -= total_gold_needed
             self._resources[1] -= total_wood_needed
             
-            self._resources[2] += num_soldiers  # Index 2: Soldiers
+            self._resources[2] += num_workers  # Index 2: Workers
             self._resources[3] += num_mines     # Index 3: Gold Buildings (Mines)
             
             # Small positive reward for successful production
-            reward += (num_soldiers * 0.1) + (num_mines * 0.1)
-            print(f"ECONOMY: Built {num_soldiers} soldiers and {num_mines} mines.")
+            reward += (num_workers * 0.1) + (num_mines * 0.1)
+            print(f"ECONOMY: Built {num_workers} workers and {num_mines} mines.")
             
         else:
             # Failure: Insufficient funds

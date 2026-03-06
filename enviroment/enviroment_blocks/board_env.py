@@ -11,7 +11,7 @@ class BoardEnv:
         
         # Index 0: Owner (0=None, 1=P1, 2=P2)
         # Index 1: Status (e.g., 1=Building, 2=Warehouse, 3=Base)
-        # Index 2: Soldiers (number of units on this specific tile)
+        # Index 2: Workers (number of units on this specific tile)
         # Index 3: Resource Value (The static value of the tile)
         self.grid = np.zeros((rows, cols, 4), dtype=np.int32)
 
@@ -47,7 +47,7 @@ class BoardEnv:
         Converts the internal numpy grid into a format the renderer understands.
         grid[:,:,0] = Owner
         grid[:,:,1] = Status (Building Type 0-5)
-        grid[:,:,2] = Soldiers
+        grid[:,:,2] = Workers
         grid[:,:,3] = Wood Resources
         """
         tile_data = []
@@ -57,7 +57,7 @@ class BoardEnv:
                 row_list.append({
                     "owner": int(self.grid[r, c, 0]),
                     "status": int(self.grid[r, c, 1]), # This is the Mine level!
-                    "soldiers": int(self.grid[r, c, 2]),
+                    "workers": int(self.grid[r, c, 2]),
                     "wood": int(self.grid[r, c, 3])
                 })
             tile_data.append(row_list)
@@ -90,7 +90,7 @@ class BoardEnv:
         mine_was_lost = False # Initialize the new flag
 
         # 1. Find all potential tiles to attack
-        candidate_attacks = {} # {(r, c): total_attacking_soldiers}
+        candidate_attacks = {} # {(r, c): total_attacking_workers}
         owned_coords = np.argwhere(self.grid[:, :, 0] == owner_id)
         
         for r, c in owned_coords:
@@ -131,7 +131,7 @@ class BoardEnv:
             # --- CAPTURE STATE BEFORE OVERWRITING ---
             previous_owner = int(self.grid[target_r, target_c, 0])
             target_structure = int(self.grid[target_r, target_c, 1])
-            defeated_soldiers = int(self.grid[target_r, target_c, 2])
+            defeated_workers = int(self.grid[target_r, target_c, 2])
             
             # Check if a mine was lost (assuming Structure ID 2 is a Mine)
             if previous_owner != 0 and target_structure != 0:
@@ -142,16 +142,16 @@ class BoardEnv:
             
             # Conquer the tile
             self.grid[target_r, target_c, 0] = int(owner_id)
-            self.grid[target_r, target_c, 2] = 1 # Occupy with 1 soldier
+            self.grid[target_r, target_c, 2] = 1 # Occupy with 1 worker
             
             # Return the new 5th variable: mine_was_lost
-            return True, truncated, previous_owner, defeated_soldiers, mine_was_lost
+            return True, truncated, previous_owner, defeated_workers, mine_was_lost
         
         return False, False, None, 0, False
 
-    def redistribute_soldiers(self, owner_id, total_soldiers, style=0):
+    def redistribute_workers(self, owner_id, total_workers, style=0):
         """
-        Distributes total_soldiers based on a strategic style:
+        Distributes total_workers based on a strategic style:
             0: Balanced (Equal)
             1: Frontline (Mass units at the borders for attack)
             2: Defensive (Mass units near the base)
@@ -164,12 +164,12 @@ class BoardEnv:
         if num_tiles == 0:
             return
 
-        # 2. Rule: Every tile needs at least 1 soldier to remain 'owned'
+        # 2. Rule: Every tile needs at least 1 worker to remain 'owned'
         # This prevents "teleporting" your whole army and leaving land empty
-        if total_soldiers < num_tiles:
+        if total_workers < num_tiles:
             base = (0, 0) if owner_id == 1 else (self.rows - 1, self.cols - 1)
             distances = [np.linalg.norm(np.array(coord) - np.array(base)) for coord in owned_indices]
-            keep_indices = np.argsort(distances)[:total_soldiers]
+            keep_indices = np.argsort(distances)[:total_workers]
             
             for i in range(num_tiles):
                 if i not in keep_indices:
@@ -211,29 +211,29 @@ class BoardEnv:
         # Convert weights to a probability distribution
         probs = weights / np.sum(weights)
         
-        # Reserve 1 soldier per tile first to maintain ownership
-        remaining_soldiers = total_soldiers - num_tiles
-        SOLDIER_LIMIT = 50
+        # Reserve 1 worker per tile first to maintain ownership
+        remaining_workers = total_workers - num_tiles
+        WORKER_LIMIT = 50
         base_coords = (0, 0) if owner_id == 1 else (self.rows - 1, self.cols - 1)
-        excess_soldiers = 0
+        excess_workers = 0
         
-        if remaining_soldiers > 0:
-            # Distribute the "extra" soldiers based on the calculated probabilities
-            extra_allocations = np.random.multinomial(remaining_soldiers, probs)
+        if remaining_workers > 0:
+            # Distribute the "extra" workers based on the calculated probabilities
+            extra_allocations = np.random.multinomial(remaining_workers, probs)
             for i, (r, c) in enumerate(owned_indices):
                 total_on_tile = 1 + extra_allocations[i]
                 
                 # Check limit (Base has no limit)
-                if (r, c) != base_coords and total_on_tile > SOLDIER_LIMIT:
-                    excess_soldiers += (total_on_tile - SOLDIER_LIMIT)
-                    self.grid[r, c, 2] = SOLDIER_LIMIT
+                if (r, c) != base_coords and total_on_tile > WORKER_LIMIT:
+                    excess_workers += (total_on_tile - WORKER_LIMIT)
+                    self.grid[r, c, 2] = WORKER_LIMIT
                 else:
                     self.grid[r, c, 2] = total_on_tile
             
             # All overflow units go to the base
-            self.grid[base_coords[0], base_coords[1], 2] += excess_soldiers
+            self.grid[base_coords[0], base_coords[1], 2] += excess_workers
         else:
-            # Just 1 soldier per tile if we are at the limit
+            # Just 1 worker per tile if we are at the limit
             for r, c in owned_indices:
                 self.grid[r, c, 2] = 1
 
@@ -265,9 +265,9 @@ class BoardEnv:
 
                 # 3. Defense Logic
                 target_owner = int(self.grid[tr, tc, 0])
-                # We track the actual soldiers on the tile for the "defeated" count
-                actual_soldiers = int(self.grid[tr, tc, 2])
-                target_defense = actual_soldiers
+                # We track the actual workers on the tile for the "defeated" count
+                actual_workers = int(self.grid[tr, tc, 2])
+                target_defense = actual_workers
 
                 
                 # Apply mechanical bonus for bases
@@ -278,17 +278,17 @@ class BoardEnv:
                 if target_owner == 0 or total_attacking_force > target_defense:
                     base_captured = (tr, tc) == enemy_base
                     
-                    # The "defeated" count is the number of soldiers that were there
-                    # If target_owner was 0, actual_soldiers is likely 0 anyway.
-                    defeated_count = actual_soldiers
+                    # The "defeated" count is the number of workers that were there
+                    # If target_owner was 0, actual_workers is likely 0 anyway.
+                    defeated_count = actual_workers
                     
                     # Update Grid
                     self.grid[tr, tc, 0] = int(owner_id)
-                    self.grid[tr, tc, 2] = 1 # Occupy with 1 soldier
+                    self.grid[tr, tc, 2] = 1 # Occupy with 1 worker
                     
                     return True, base_captured, target_owner, "success", defeated_count
                 
-                # If the attack fails, 0 enemy soldiers were removed from the board
+                # If the attack fails, 0 enemy workers were removed from the board
                 return False, False, target_owner, "insufficient_force", 0
 
     def get_owned_tiles(self, owner_id):
@@ -302,7 +302,7 @@ class BoardEnv:
             Returns a 5-channel representation of the board:
             0: Owner ID
             1: Status (Buildings)
-            2: Soldiers
+            2: Workers
             3: Adjacency Mask (Maintained at index 3 for script compatibility)
             4: Resources (Added at the end)
             """
@@ -318,12 +318,12 @@ class BoardEnv:
                     if owner_channel[nr, nc] != 1:
                         mask[nr, nc] = 1
 
-            # 2. Extract layers from self.grid (which is [Owner, Status, Soldiers, Resources])
-            core_layers = self.grid[:, :, :3]  # Owner, Status, Soldiers
+            # 2. Extract layers from self.grid (which is [Owner, Status, Workers, Resources])
+            core_layers = self.grid[:, :, :3]  # Owner, Status, Workers
             resource_layer = self.grid[:, :, 3:] # Resources
             
             # 3. Reconstruct with Mask at Index 3
-            # Resulting order: [Owner(0), Status(1), Soldiers(2), Mask(3), Resources(4)]
+            # Resulting order: [Owner(0), Status(1), Workers(2), Mask(3), Resources(4)]
             combined = np.concatenate([
                 core_layers, 
                 mask[..., np.newaxis], 
@@ -354,7 +354,8 @@ class BoardEnv:
             len(self.p1_trade_manager.active_routes),                      # 4
             self.get_owned_tiles(owner_id=1),                              # 5: P1 owned tiles
             self.get_owned_tiles(owner_id=2),                              # 6: P2 owned tiles (Replaced duplicate)
-            self.get_potencial_trade_routes()                              # 7
+            self.get_potencial_trade_routes(),                             # 7
+            self.p1_buildings_manager.get_crop_field_count(player_id=1)    # 8
             # Future-proofing: add more here easily
         ], dtype=np.float32)
         
@@ -388,13 +389,14 @@ class BoardEnv:
 
     def get_build_mask(self, player_id: int, player_gold: int, player_wood: int) -> np.ndarray:
             """
-            Returns a mask of size 8:
+            Returns a mask of size 9:
             Indices 0-5: Build Mine (Type 0: None, 1: Level 1, 2-5: Reserved)
             Index 6: Create Trade Route
             Index 7: Build Warehouse 
+            Index 8: Build Crop Field
             """
-            # Initialize mask for 8 actions (0-7)
-            mask = np.zeros(8, dtype=bool)
+            # Initialize mask for 9 actions (0-8)
+            mask = np.zeros(9, dtype=bool)
             
             # --- MINE LOGIC (Indices 0-5) ---
             mask[0] = True # "Do Nothing" is always valid for the mine head
@@ -448,6 +450,22 @@ class BoardEnv:
 
             if can_afford_wh and has_valid_adjacent_site:
                 mask[7] = True
+
+            # --- CROP FIELD LOGIC (Index 8) ---
+            crop_gold_cost = 20
+            crop_wood_cost = 10
+            can_afford_crop = (player_gold >= crop_gold_cost and player_wood >= crop_wood_cost)
+            
+            has_valid_crop_site = False
+            for r, c in potential_sites:
+                for nr, nc in self._get_neighbors(r, c):
+                    if self.grid[nr, nc, 1] == 2 or self.grid[nr, nc, 1] == 3: # Neighbor must be a WAREHOUSE (Status 2) or BASE (Status 3)
+                        has_valid_crop_site = True
+                        break
+                if has_valid_crop_site: break
+            
+            if can_afford_crop and has_valid_crop_site:
+                mask[8] = True
                 
             return mask
 
@@ -461,6 +479,13 @@ class BoardEnv:
         # Sum the resource values (Index 3) of those tiles
         total_income = np.sum(self.grid[owned_mask, 3])
         return total_income
+
+    def collect_food_income(self, player_id):
+        """
+        Calculates food income from crop fields.
+        """
+        crop_fields = self.p1_buildings_manager.get_crop_field_count(player_id)
+        return crop_fields * 10 # 10 food per crop field
 
 
 #------- methods for trade route management-----------
