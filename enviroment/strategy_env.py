@@ -65,15 +65,14 @@ class StrategyEnv(gym.Env):
 
         ## 0 means "Do nothing" for that specific unit
         self.diplomacy_action_space = spaces.Discrete(3)
-        self.economy_action_space = spaces.MultiDiscrete([10, 6, 6, 2, 2])  # [workers, mines, trade, warehouse, crop_field]
-        self.distribution_action_space = spaces.Discrete(5)
+        # Economy: [workers, mines, trade, warehouse, crop_field]
+        self.economy_action_space = spaces.MultiDiscrete([10, 6, 6, 2, 2])
         self.target_action_space = spaces.Discrete(256)  # 16x16 board
         
-        # Combined action space (Tuple of discrete actions)
+        # Combined action space
         self.action_space = spaces.Dict({
             "diplomacy": self.diplomacy_action_space,
             "economy": self.economy_action_space,
-            "distribution": self.distribution_action_space,
             "target_tile": self.target_action_space,
         })
 
@@ -126,7 +125,7 @@ class StrategyEnv(gym.Env):
         #Diplo Head 
         self.diplomacy_action = action["diplomacy"]
 
-        #Economy Head
+        # Economy Head
         # Directly extract counts
         # action["economy"] is now an array like [3, 0]
         self.workers_to_build = action["economy"][0]
@@ -134,9 +133,6 @@ class StrategyEnv(gym.Env):
         self.trade_route_action = action["economy"][2]
         self.warehouse_action = action["economy"][3]
         self.crop_field_action = action["economy"][4]
-        
-        # Distribution Head
-        self.distribution_action = action["distribution"]
 
         # Target Head
         target_idx = action["target_tile"]
@@ -148,14 +144,6 @@ class StrategyEnv(gym.Env):
         terminated = False
         truncated = False
         return reward, terminated, truncated
-
-    def _store_actions_for_rendering(self, action:dict):
-        self.last_diplomacy_choice = action["diplomacy"]
-        self.last_economy_choice = action["economy"]
-        self.dip_labels = ["Trade", "Pass", "Attack"]
-        self.eco_labels = ["Invest", "Create Units", "Idle"]
-        self.last_dip_str = self.dip_labels[self.last_diplomacy_choice]
-        self.last_eco_str = self.eco_labels[self.last_economy_choice]
 
     def _store_actions_for_rendering(self, action: dict):
         self.last_diplomacy_choice = action["diplomacy"]
@@ -194,11 +182,11 @@ class StrategyEnv(gym.Env):
             
             # 0. Action Extraction
             reward,terminated, truncated = self._action_extraction(action)
-            # 0.1 Workers redistribution
+            # 0.1 Workers redistribution (ALWAYS STYLE 0)
             p1_workers = self.player_env.resources[2]
             p2_workers = self.opponent_env.resources[2]
 
-            self.board_env.redistribute_workers(owner_id=1, total_workers=p1_workers, style=self.distribution_action)
+            self.board_env.redistribute_workers(owner_id=1, total_workers=p1_workers, style=0)
             self.board_env.redistribute_workers(owner_id=2, total_workers=p2_workers, style=0)
             
 

@@ -43,16 +43,14 @@ class EconomicAgent(nn.Module):
         return workers, mines, trade, warehouse, crop
 
 class MilitaryAgent(nn.Module):
-    """Focuses on Unit Distribution and Spatial Targeting."""
+    """Focuses on Spatial Targeting."""
     def __init__(self, spatial_channels, context_dim):
         super().__init__()
-        self.dist_head = nn.Linear(context_dim, 5) # Matches distribution_action_space
         self.target_head = nn.Conv2d(spatial_channels, 1, kernel_size=1)
 
     def forward(self, spatial_features, common_features):
-        dist = self.dist_head(common_features)
         target_logits = self.target_head(spatial_features)
-        return dist, target_logits.view(target_logits.size(0), -1)
+        return target_logits.view(target_logits.size(0), -1)
 
 class MARL_Strategy(nn.Module):
     def __init__(self, in_channels=5, stats_dim=27):
@@ -97,7 +95,7 @@ class MARL_Strategy(nn.Module):
         
         # 3. Agent Decisions
         workers_l, mines_l, trade_l, wh_l, crop_l = self.eco_agent(shared_latent)
-        mil_dist, mil_target = self.mil_agent(spatial_features, shared_latent)
+        mil_target = self.mil_agent(spatial_features, shared_latent)
         dip_logits = self.dip_head(shared_latent)
         
         # 4. Masking
@@ -128,7 +126,7 @@ class MARL_Strategy(nn.Module):
         
         return {
             "eco": (workers_l, mines_l, trade_l, wh_l, crop_l),
-            "mil": (mil_dist, mil_target),
+            "mil": mil_target,
             "dip": dip_logits,
             "value": value
         }

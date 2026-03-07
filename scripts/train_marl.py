@@ -196,8 +196,7 @@ class StrategyLightningModule(pl.LightningModule):
                     torch.distributions.Categorical(logits=eco_l[3]).sample().item(),
                     torch.distributions.Categorical(logits=eco_l[4]).sample().item()
                 ],
-                "distribution": torch.distributions.Categorical(logits=mil_l[0]).sample().item(),
-                "target_tile": torch.distributions.Categorical(logits=mil_l[1]).sample().item()
+                "target_tile": torch.distributions.Categorical(logits=mil_l).sample().item()
             }
 
             next_obs, reward, terminated, truncated, next_info = self.env.step(action)
@@ -230,8 +229,7 @@ class StrategyLightningModule(pl.LightningModule):
                     torch.distributions.Categorical(logits=eco_l[3]).sample().item(),
                     torch.distributions.Categorical(logits=eco_l[4]).sample().item()
                 ],
-                "distribution": torch.distributions.Categorical(logits=mil_l[0]).sample().item(),
-                "target_tile": torch.distributions.Categorical(logits=mil_l[1]).sample().item()
+                "target_tile": torch.distributions.Categorical(logits=mil_l).sample().item()
             }
 
             next_obs, reward, terminated, truncated, next_info = self.env.step(action)
@@ -249,7 +247,7 @@ class StrategyLightningModule(pl.LightningModule):
         self._compute_gae(trajectory_data, self.obs, self.info, start_idx)
 
     def training_step(self, batch, batch_idx):
-        (states, a_dip, a_eco, a_dist, a_target, rewards, _, _, _, m_target, m_build, pre_adv, pre_returns) = batch
+        (states, a_dip, a_eco, a_target, rewards, _, t_d, t_c, m_target, m_build, pre_adv, pre_returns) = batch
 
         boards, stats, t_mask, b_mask = self._process_obs(states, (m_target, m_build))
         res = self.model(boards, stats, target_mask=t_mask, build_mask=b_mask)
@@ -260,7 +258,7 @@ class StrategyLightningModule(pl.LightningModule):
         
         res["dip"] = stabilize_logits(res["dip"])
         res["eco"] = [stabilize_logits(l) for l in res["eco"]]
-        res["mil"] = [stabilize_logits(l) for l in res["mil"]]
+        res["mil"] = stabilize_logits(res["mil"])
         
         adv = (pre_adv - pre_adv.mean()) / (pre_adv.std() + 1e-8)
 
@@ -271,8 +269,7 @@ class StrategyLightningModule(pl.LightningModule):
         d_tra = torch.distributions.Categorical(logits=res["eco"][2])
         d_wh  = torch.distributions.Categorical(logits=res["eco"][3])
         d_cro = torch.distributions.Categorical(logits=res["eco"][4])
-        d_mil = torch.distributions.Categorical(logits=res["mil"][0])
-        d_tar = torch.distributions.Categorical(logits=res["mil"][1])
+        d_tar = torch.distributions.Categorical(logits=res["mil"])
 
         lp = (d_dip.log_prob(a_dip) + 
               d_wor.log_prob(a_eco[:, 0]) +
@@ -280,14 +277,13 @@ class StrategyLightningModule(pl.LightningModule):
               d_tra.log_prob(a_eco[:, 2]) + 
               d_wh.log_prob(a_eco[:, 3]) + 
               d_cro.log_prob(a_eco[:, 4]) + 
-              d_mil.log_prob(a_dist) + 
               d_tar.log_prob(a_target))
 
         actor_loss = -(lp * adv).mean()
         critic_loss = F.huber_loss(res["value"].view(-1), pre_returns.view(-1), delta=1.0)
         
         entropy = (d_dip.entropy() + d_wor.entropy() + d_min.entropy() + 
-                   d_tra.entropy() + d_wh.entropy() + d_cro.entropy() + d_mil.entropy() + 
+                   d_tra.entropy() + d_wh.entropy() + d_cro.entropy() + 
                    d_tar.entropy()).mean()
 
         total_loss = actor_loss + (self.value_loss_coeff * critic_loss) - (self.entropy_coeff * entropy)
@@ -331,7 +327,7 @@ def train_agent_lightning():
         logger=MLFlowLogger(experiment_name="MARL_Strategy_Optimized", tracking_uri="file:./ml-runs"),
         callbacks=[EarlyStopping(monitor='loss/total', patience=50, mode='min')],
         log_every_n_steps=10,
-        limit_train_batches=100 # Optimize updates per collection
+        limit_train_batches=200 
     )
 
     trainer.fit(model)

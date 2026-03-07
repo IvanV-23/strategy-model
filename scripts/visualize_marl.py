@@ -86,7 +86,7 @@ def visualize_marl_agent():
             )
             
             eco_l = res["eco"] # (workers, mines, trade, warehouse, crop)
-            mil_l = res["mil"] # (dist, target)
+            mil_target = res["mil"]
             dip_l = res["dip"]
 
             # 7. Action Selection (Greedy/Argmax)
@@ -99,8 +99,7 @@ def visualize_marl_agent():
                     torch.argmax(eco_l[3], dim=1).item(),
                     torch.argmax(eco_l[4], dim=1).item()
                 ],
-                "distribution": torch.argmax(mil_l[0], dim=1).item(),
-                "target_tile": torch.argmax(mil_l[1], dim=1).item()
+                "target_tile": torch.argmax(mil_target, dim=1).item()
             }
 
         # 8. Step environment

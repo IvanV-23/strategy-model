@@ -21,7 +21,6 @@ class ReplayBuffer:
 
         self.actions_diplomacy = np.zeros((capacity,), dtype=np.int64)
         self.actions_economy = np.zeros((capacity, 5), dtype=np.int64) 
-        self.actions_distribution = np.zeros((capacity,), dtype=np.int64)
         self.actions_target = np.zeros((capacity,), dtype=np.int64)
         
         # Masking dimensions from action space and build mask
@@ -56,7 +55,6 @@ class ReplayBuffer:
 
         self.actions_diplomacy[self.idx] = action["diplomacy"]
         self.actions_economy[self.idx] = action["economy"] 
-        self.actions_distribution[self.idx] = action["distribution"]
         self.actions_target[self.idx] = action["target_tile"]
         
         # Store both masks from the info dict
@@ -89,7 +87,6 @@ class ReplayBuffer:
                 get_dict(self.stats, self.board_states), 
                 torch.from_numpy(self.actions_diplomacy[idxs]),
                 torch.from_numpy(self.actions_economy[idxs]),
-                torch.from_numpy(self.actions_distribution[idxs]),
                 torch.from_numpy(self.actions_target[idxs]),
                 torch.from_numpy(self.rewards[idxs]),
                 get_dict(self.next_stats, self.next_board_states),

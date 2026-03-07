@@ -110,12 +110,15 @@ class BoardEnv:
             target_owner = self.grid[tr, tc, 0]
             target_defense = self.grid[tr, tc, 2]
 
-            # --- ADDED: Mine Defense Bonus ---
-            # Check if a mine (status > 0) is built on this tile
-            if self.grid[tr, tc, 1] > 0:
-                target_defense += 50
+            # --- Defense Bonuses ---
+            if target_owner != 0:
+                target_defense += 100 # Base controlled tile bonus
+                
+                # Check if any building is on this tile
+                if self.grid[tr, tc, 1] > 0:
+                    target_defense += 20 # Building bonus
 
-            # Apply base defense bonus if applicable (consistent with claim_target_tile)
+            # Apply additional base defense bonus for main bases
             if (tr, tc) == (0, 0) or (tr, tc) == (rows - 1, cols - 1):
                 target_defense += 50
 
@@ -269,8 +272,15 @@ class BoardEnv:
                 actual_workers = int(self.grid[tr, tc, 2])
                 target_defense = actual_workers
 
+                # --- Defense Bonuses ---
+                if target_owner != 0:
+                    target_defense += 100 # Base controlled tile bonus
+                    
+                    # Check if any building is on this tile
+                    if self.grid[tr, tc, 1] > 0:
+                        target_defense += 20 # Building bonus
                 
-                # Apply mechanical bonus for bases
+                # Apply mechanical bonus for main bases
                 if (tr, tc) == p1_base or (tr, tc) == p2_base:
                     target_defense += 50
 
