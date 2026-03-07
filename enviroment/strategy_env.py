@@ -9,7 +9,9 @@ from enviroment.reward_env import RewardEnv
 from enviroment.enviroment_blocks.resources_manager_env import ResourceManager
 from enviroment.enviroment_blocks.opponent_env import OpponentEnv
 from enviroment.enviroment_blocks.player_env import PlayerEnv
+import os
 from enviroment.enviroment_render.strategy_renderer import StrategyRenderer
+from enviroment.enviroment_render.cpp_bridge import CppRendererBridge
 from enviroment.enviroment_blocks.board_env import BoardEnv
 from enviroment.enviroment_blocks.stats_env import StatsEnv
 from enviroment.enviroment_branches.diplomacy_env import DiplomacyEnv
@@ -40,12 +42,23 @@ class StrategyEnv(gym.Env):
         self.economy_branch = EconomyEnv(board_env=self.board_env,player_env=self.player_env,opponent_env=self.opponent_env)
         
         #Initialize renderer
-        # 1. Define dimensions FIRST
         self.screen_width = 800
         self.screen_height = 1000
         self.render_mode = render_mode
         self.metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
-        self.renderer = StrategyRenderer(self.screen_width, self.screen_height, self.metadata)
+
+        if os.getenv("USE_CPP_RENDER") == "1" and render_mode == "human":
+            print("Attempting to use C++ renderer...")
+            try:
+                self.renderer = CppRendererBridge(self.screen_width, self.screen_height, self.metadata)
+                if self.renderer.proc is None: # Fallback if C++ renderer fails to start
+                    print("C++ renderer failed to start. Falling back to Pygame renderer.")
+                    self.renderer = StrategyRenderer(self.screen_width, self.screen_height, self.metadata)
+            except Exception as e:
+                print(f"Error initializing C++ renderer: {e}. Falling back to Pygame.")
+                self.renderer = StrategyRenderer(self.screen_width, self.screen_height, self.metadata)
+        else:
+            self.renderer = StrategyRenderer(self.screen_width, self.screen_height, self.metadata)
 
         # Define the action space for Diplomacy and Economy
         # Diplomacy: 0: Trade, 1: Pass, 2: Attack

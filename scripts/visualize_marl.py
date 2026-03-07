@@ -44,12 +44,18 @@ def visualize_marl_agent():
     obs, info = env.reset()
     running = True
     
-    print("Starting MARL visualization loop. Close the Pygame window to stop.")
+    use_cpp = os.getenv("USE_CPP_RENDER") == "1"
+    if use_cpp:
+        print("Starting MARL visualization loop with C++ external renderer.")
+    else:
+        print("Starting MARL visualization loop. Close the Pygame window to stop.")
+
     while running:
         # Prevent Pygame from hanging
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
+        if not use_cpp:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
 
         # 4. Prepare inputs
         with torch.no_grad():

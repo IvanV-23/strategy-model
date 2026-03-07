@@ -17,6 +17,7 @@ class RewardEnv:
         mines_lv1 = self.board.p1_buildings_manager.get_mines_by_owner_and_level(player_id=1, mine_level=1)
         mines_lv2 = self.board.p1_buildings_manager.get_mines_by_owner_and_level(player_id=1, mine_level=4)
         warehouses = self.board.p1_buildings_manager.get_mines_by_owner_and_level(player_id=1, mine_level=2)
+        
 
         reward =  (self.player._resources[2]*0.2 + self.player._resources[3]*0.2 + len(trade_routes)*2 + owned_tiles*0.5)
         
@@ -41,8 +42,8 @@ class RewardEnv:
         reward += self.player.capacity[0]*0.02
         reward += self.player.capacity[1]*0.02
 
-        reward -= player_resources_result["lost_gold"]*0.001
-        reward -= player_resources_result["lost_wood"]*0.001
+        #reward -= player_resources_result["lost_gold"]*0.001
+        #reward -= player_resources_result["lost_wood"]*0.001
 
         
 
