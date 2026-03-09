@@ -2,13 +2,13 @@ import numpy as np
 
 class OpponentEnv:
     def __init__(self):
-        # Index 0: Gold, 1: Wood, 2: Soldiers
+        # Index 0: Gold, 1: Wood, 2: Workers
         self._resources = np.array([100, 50, 10], dtype=np.int32)
     
-    def reset(self, gold=100, wood=50, soldiers=10):
+    def reset(self, gold=100, wood=50, workers=10):
             """Restores the opponent to starting resources."""
-            # Index 0: Gold, 1: Wood, 2: Soldiers
-            self._resources = np.array([gold, wood, soldiers], dtype=np.int32)
+            # Index 0: Gold, 1: Wood, 2: Workers
+            self._resources = np.array([gold, wood, workers], dtype=np.int32)
             return self.resources
 
     def action_step(self, current_turn: int, owned_tiles: int):
@@ -20,7 +20,7 @@ class OpponentEnv:
             self._resources[0] += 1 + owned_tiles * 2
             self._resources[1] += 1 + owned_tiles 
             
-            # 1. Economic Logic: Build soldiers if possible every 5 turns
+            # 1. Economic Logic: Build workers if possible every 5 turns
             if current_turn % 1 == 0:
                 can_afford_gold = self._resources[0] // 15
                 can_afford_wood = self._resources[1] // 7
@@ -30,7 +30,7 @@ class OpponentEnv:
                 if num_to_build > 0:
                     self._resources[0] -= 15 * num_to_build
                     self._resources[1] -= 7 * num_to_build
-                    self._resources[2] += num_to_build  # Gain a batch of soldiers
+                    self._resources[2] += num_to_build  # Gain a batch of workers
             
             # 2. Strategic Intent: Decide to attack every 10 turns
             intent_to_attack = False
@@ -61,5 +61,5 @@ class OpponentEnv:
 
     @property
     def strength(self) -> int:
-        """Still return soldiers as 'strength' for legacy logic."""
+        """Still return workers as 'strength' for legacy logic."""
         return int(self._resources[2])

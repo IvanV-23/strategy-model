@@ -7,3 +7,5 @@ ml-runs/
 setup.bat
 
 mlflow.db
+
+cpp_render/build/

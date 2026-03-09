@@ -19,16 +19,17 @@ class Actor(nn.Module):
         )
         
         # UPDATE: Changed from +8 to +10 for the new stats vector
-        self.fc_common = nn.Linear((64 * board_size) + 15, 256)
+        self.fc_common = nn.Linear((64 * board_size) + 20, 256)
 
-        # SINGLE HEAD for Economy: size is (eco_dim * 3) -> [Soldiers, Mines, Trade]
+        # SINGLE HEAD for Economy: size is (eco_dim * 3) -> [Workers, Mines, Trade]
         self.economy_head = economy_head.EconomyHead(
                                     input_dim=256, 
                                     sol_dim=10,   # 10
-                                    mine_dim=2,  # 6
-                                    trade_dim=6  # 6
+                                    mine_dim=3,  # 6
+                                    trade_dim=6, # 6
+                                    warehouse_dim=2  
                              )
-        
+        #TODO: Use mine and warehouse logits to update building (0 pass, 1 build, 2 update)
         self.diplomacy_head = nn.Sequential(nn.Linear(256, action_dim_dip), nn.LayerNorm(action_dim_dip)) 
         self.distribution_head = nn.Sequential(nn.Linear(256, action_dim_dist), nn.LayerNorm(action_dim_dist))
         self.target_head = nn.Conv2d(64, 1, kernel_size=1)
@@ -42,18 +43,24 @@ class Actor(nn.Module):
         common = F.relu(self.fc_common(combined))
 
         # --- ECONOMY HEAD ---
-        soldiers_logits, mines_logits, trade_logits = self.economy_head(common)
+        workers_logits, mines_logits, trade_logits, warehouse_logits = self.economy_head(common)
 
         if build_mask is not None:
-            # Mine Masking (Indices 0-5)
-            mines_logits = mines_logits.masked_fill(~build_mask[:, :2].bool(), -1e9)
+            # Mine Masking 
+            mines_logits = mines_logits.masked_fill(~build_mask[:, :3].bool(), -1e4)
             
             # Trade Masking (Index 6)
             # We treat trade_logits as binary (0: skip, 1: build)
             # We only mask index 1 (the 'build' action)
             trade_mask = torch.ones_like(trade_logits).bool()
             trade_mask[:, 1] = build_mask[:, 6].bool() 
-            trade_logits = trade_logits.masked_fill(~trade_mask, -1e9)
+            trade_logits = trade_logits.masked_fill(~trade_mask, -1e4)
+
+            # 3. NEW: Warehouse Masking 
+            # Assuming build_mask index 7 represents "Can build warehouse"
+            wh_mask = torch.ones_like(warehouse_logits).bool()
+            wh_mask[:, 1] = build_mask[:, 7].bool() # Mask index 1 (the 'build' action)
+            warehouse_logits = warehouse_logits.masked_fill(~wh_mask, -1e4)
 
         # --- DIPLOMACY & DISTRIBUTION ---
         dip_logits = self.diplomacy_head(common)
@@ -62,9 +69,9 @@ class Actor(nn.Module):
         # --- TARGET HEAD ---
         target_logits = self.target_head(features).reshape(batch_size, -1)
         if target_mask is not None:
-            target_logits = target_logits.masked_fill(~target_mask.bool(), -1e9)
+            target_logits = target_logits.masked_fill(~target_mask.bool(), -1e4)
 
-        return dip_logits, (soldiers_logits, mines_logits, trade_logits), dist_logits, target_logits
+        return dip_logits, (workers_logits, mines_logits, trade_logits, warehouse_logits), dist_logits, target_logits
 
 class Critic(nn.Module):
     def __init__(self, board_size: int = 64):
@@ -78,7 +85,7 @@ class Critic(nn.Module):
         )
         
         self.value_head = nn.Sequential(
-            nn.Linear((16 * board_size) + 15, 64),
+            nn.Linear((16 * board_size) + 20, 64),
             nn.ReLU(),
             nn.Linear(64, 1)
         )

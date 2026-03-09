@@ -1,4 +1,5 @@
 # Project Context: StrategyProblem
+ignore the .venv folder
 
 ## Project Description
 This project aims to develop a Multi-Agent Reinforcement Learning (MARL) agent capable of playing a strategic game. The agent must manage two distinct decision-making branches:

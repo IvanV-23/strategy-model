@@ -15,14 +15,17 @@ class DiplomacyEnv:
         if diplomacy_action == 0:
             action_result = self.trade()
         if diplomacy_action == 1:
-            reward -= current_turn*0.001
+            reward -= (1000 - current_turn) * 0.01
             action_result =    {"reward":reward,
                                 "history":f"Pass",
-                                "truncated":False
+                                "terminated":False,
+                                "defeated_workers": 0
                                 }
         if diplomacy_action == 2:
             action_result = self.attack(target_col=target_col,target_row=target_row)
 
+        if "defeated_workers" not in action_result:
+            action_result["defeated_workers"] = 0
 
         return action_result
 
@@ -36,7 +39,8 @@ class DiplomacyEnv:
             reward -= 0.01
             return {"reward":reward,
                     "history":f"Fail trade",
-                    "truncated":False
+                    "truncated":False,
+                    "defeated_workers": 0
                     }
         if self.player._resources[1] >= trade_routes*50:
             self.player._resources[1] -= trade_routes*50
@@ -46,15 +50,16 @@ class DiplomacyEnv:
             reward -= 0.01
         return {"reward":reward,
                 "history":f"Traded ({trade_routes*50}x{trade_routes*25})",
-                "truncated":False
+                "truncated":False,
+                "defeated_workers": 0
                 }
 
     def attack(self,target_row,target_col):
-        truncated = False
+        terminated = False
         reward = 0
-        # 1. Ask the board to resolve combat based on spatial soldier distribution
+        # 1. Ask the board to resolve combat based on spatial worker distribution
         # Note: claim_adjacent_tile now handles 'Attack Power > Defense' internally
-        victory, base_captured, prev_owner, reason, defeated_soldiers = self.board.claim_target_tile(1, (target_row, target_col))
+        victory, base_captured, prev_owner, reason, defeated_workers = self.board.claim_target_tile(1, (target_row, target_col))
         
         res_msg = "VICTORY" if victory else "FAILED"
         
@@ -65,21 +70,21 @@ class DiplomacyEnv:
 
         # 3. Update Opponent resources if they lost
         if victory:
-            # If P1 won, P2 loses soldiers and resources
+            # If P1 won, P2 loses workers and resources
             self.opponent.resources[0] = max(0, self.opponent.resources[0] - 50)
             self.opponent.resources[1] = max(0, self.opponent.resources[1] - 25)
             
-            # Soldiers are already handled by redistribution in the next step, 
-            # but let's reduce their pool directly for the loss:
-            self.opponent.resources[2] = max(0, self.opponent.resources[2] - defeated_soldiers)
-            reward += defeated_soldiers * 0.01  
+            # Deduct the actual workers lost on the tile from the opponent's pool
+            self.opponent.resources[2] = int(max(0, self.opponent.resources[2] - defeated_workers))
+            reward += defeated_workers * 0.01  
 
         # 4. Handle game termination
         if base_captured:
-            truncated = True
+            terminated = True
             print(f"Opponent defeated! Total Reward: {reward}")
 
         return {"reward":reward,
                 "history":f"Attack on ({target_row},{target_col}): {res_msg}",
-                "truncated":truncated
+                "terminated":terminated,
+                "defeated_workers": defeated_workers
                 }

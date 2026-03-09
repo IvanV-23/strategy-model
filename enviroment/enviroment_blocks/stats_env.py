@@ -8,35 +8,13 @@ class StatsEnv:
         self.player = player_env
         self.board = board_env
     
-    def get_game_stats(self)->dict:
+    def get_game_stats(self, lost_gold: float = 0, lost_wood: float = 0, lost_food: float = 0, defeated_workers: int = 0)->dict:
         
         board_stats = self.board.get_board_state_and_stats()["stats"]
 
-        global_stats = np.append(board_stats, self.player.gold_net_income).astype(np.float32)
+        global_stats = np.append(board_stats, [self.player.gold_net_income, lost_gold, lost_wood, lost_food, defeated_workers]).astype(np.float32)
 
         return global_stats
          
-    def calculate_player_resources(self):
-        #Turn status
-        owned_tiles=self.board.get_owned_tiles(owner_id=1)
-        wood_production = self.board.collect_wood_income(player_id=1)
-        routes_gold_income = self.board.collect_gold_income(player_id=1)
 
-
-        #Gold calculation
-        gold_income = 1 + owned_tiles + routes_gold_income
-        gold_expenses = self.player._resources[2] * 0.005
-        self.player.gold_net_income = gold_income - gold_expenses
-        self.player._resources[0] += self.player.gold_net_income
-
-        
-        print(f"Gold expenses {gold_expenses}")
-        print(f"Gold gold_income {gold_income}")
-        
-        #Wood calculation
-        self.player.wood_raw_income = 1 + wood_production + self.player._resources[3] * 2
-
-        self.player._resources[1] +=  self.player.wood_raw_income
-
-        return {"status":"ok"}
        
