@@ -45,6 +45,11 @@ class BoardEnv:
         self.grid[base_coords[0], base_coords[1], 4] += count
 
     def move_soldiers(self):
+        """
+        Moves soldiers randomly. Returns True if opponent base is captured.
+        """
+        terminated = False
+        p2_base = (self.rows - 1, self.cols - 1)
         next_soldier_grid = np.zeros((self.rows, self.cols), dtype=np.int32)
         soldier_indices = np.argwhere(self.grid[:, :, 4] > 0)
         
@@ -69,6 +74,10 @@ class BoardEnv:
 
                 if attack_power > defense_power:
                     # Success: Wipe tile
+                    if (nr, nc) == p2_base:
+                        terminated = True
+                        print("SOLDIERS CAPTURED THE ENEMY BASE!")
+
                     self.grid[nr, nc, 0] = 0
                     self.grid[nr, nc, 1] = 0
                     self.grid[nr, nc, 2] = 0
@@ -80,6 +89,7 @@ class BoardEnv:
                 next_soldier_grid[nr, nc] += count
 
         self.grid[:, :, 4] = next_soldier_grid
+        return terminated
 
     def grow_workers(self, p1_food_gen=None):
         WORKER_LIMIT = 50

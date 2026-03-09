@@ -15,7 +15,7 @@ class DiplomacyEnv:
         if diplomacy_action == 0:
             action_result = self.trade()
         if diplomacy_action == 1:
-            reward -= current_turn*0.001
+            reward -= (1000 - current_turn) * 0.01
             action_result =    {"reward":reward,
                                 "history":f"Pass",
                                 "terminated":False,

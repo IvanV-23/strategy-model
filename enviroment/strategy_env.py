@@ -186,7 +186,10 @@ class StrategyEnv(gym.Env):
                 return self._finalize_step(reward, terminated, truncated)
 
             # 0.2 SOLDIER LOGIC
-            self.board_env.move_soldiers()
+            soldier_terminated = self.board_env.move_soldiers()
+            if soldier_terminated:
+                terminated = True
+                print("SOLDIER VICTORY!")
             
             # 0.3 WORKER GROWTH LOGIC (Every 5 turns)
             if self.current_turn > 0 and self.current_turn % 5 == 0:
