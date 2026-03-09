@@ -26,7 +26,7 @@ class ReplayBuffer:
         # Masking dimensions from action space and build mask
         target_dim = action_space["target_tile"].n
         self.masks_target = np.ones((capacity, target_dim), dtype=np.bool_)
-        self.masks_build = np.ones((capacity, 9), dtype=np.bool_)
+        self.masks_build = np.ones((capacity, 7), dtype=np.bool_)
 
         self.rewards = np.zeros((capacity,), dtype=np.float32)
         self.terminated = np.zeros((capacity,), dtype=np.bool_)
@@ -60,8 +60,9 @@ class ReplayBuffer:
         # Store both masks from the info dict
         if info:
             target_dim = self.masks_target.shape[1]
+            build_dim = self.masks_build.shape[1]
             self.masks_target[self.idx] = info.get("action_mask", np.ones(target_dim)).flatten()
-            self.masks_build[self.idx] = info.get("build_mask", np.ones(8)).flatten()
+            self.masks_build[self.idx] = info.get("build_mask", np.ones(build_dim)).flatten()
 
         self.rewards[self.idx] = reward
         self.terminated[self.idx] = terminated

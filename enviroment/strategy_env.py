@@ -16,6 +16,7 @@ from enviroment.enviroment_blocks.board_env import BoardEnv
 from enviroment.enviroment_blocks.stats_env import StatsEnv
 from enviroment.enviroment_branches.diplomacy_env import DiplomacyEnv
 from enviroment.enviroment_branches.economy_env import EconomyEnv
+
 class StrategyEnv(gym.Env):
     """
     A Multi-Agent Reinforcement Learning environment for a strategic game.
@@ -61,12 +62,8 @@ class StrategyEnv(gym.Env):
             self.renderer = StrategyRenderer(self.screen_width, self.screen_height, self.metadata)
 
         # Define the action space for Diplomacy and Economy
-        # Diplomacy: 0: Trade, 1: Pass, 2: Attack
-
-        ## 0 means "Do nothing" for that specific unit
         self.diplomacy_action_space = spaces.Discrete(3)
-        # Economy: [workers, mines, trade, warehouse, crop_field]
-        self.economy_action_space = spaces.MultiDiscrete([10, 6, 6, 2, 2])
+        self.economy_action_space = spaces.MultiDiscrete([10, 3, 2, 3, 3])
         self.target_action_space = spaces.Discrete(256)  # 16x16 board
         
         # Combined action space
@@ -81,13 +78,12 @@ class StrategyEnv(gym.Env):
             "player_resources": spaces.Box(low=0, high=1000, shape=(9,), dtype=np.int32),
             "opponent_resources": spaces.Box(low=0, high=1000, shape=(3,), dtype=np.int32), 
             "turn_number": spaces.Discrete(1000),
-            "board_state": spaces.Box(low=0, high=255, shape=(5, 16, 16), dtype=np.int32),
+            "board_state": spaces.Box(low=0, high=255, shape=(6, 16, 16), dtype=np.int32),
             "board_stats": spaces.Box(low=0, high=1000, shape=(14,), dtype=np.float32),
         })
 
         self.current_turn = 0
-        #self.player_resources = np.array([100, 50, 0], dtype=np.int32)
-        #self.opponent_strength = np.array([50], dtype=np.int32)
+        self.max_turns = 1000
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -100,9 +96,9 @@ class StrategyEnv(gym.Env):
     def _get_obs(self) -> Dict[str, np.ndarray]:
         return {
             "player_resources": np.append(self.player_env.resources, self.player_env._capacity),
-            "opponent_resources": self.opponent_env.resources, # Returns the (3,) array
+            "opponent_resources": self.opponent_env.resources,
             "turn_number": self.current_turn,
-            "board_state": self.board_env.full_board_state(),  # Returns a (5, 16, 16) array
+            "board_state": self.board_env.full_board_state(),
             "board_stats": self.stats_env.get_game_stats(
                 lost_gold=getattr(self, 'lost_gold', 0),
                 lost_wood=getattr(self, 'lost_wood', 0),
@@ -126,9 +122,7 @@ class StrategyEnv(gym.Env):
         self.diplomacy_action = action["diplomacy"]
 
         # Economy Head
-        # Directly extract counts
-        # action["economy"] is now an array like [3, 0]
-        self.workers_to_build = action["economy"][0]
+        self.workers_to_build = action["economy"][0] 
         self.mines_to_build = action["economy"][1]
         self.trade_route_action = action["economy"][2]
         self.warehouse_action = action["economy"][3]
@@ -139,7 +133,6 @@ class StrategyEnv(gym.Env):
         self.target_row = target_idx // self.board_env.cols
         self.target_col = target_idx % self.board_env.cols
 
-
         reward = 0.0
         terminated = False
         truncated = False
@@ -148,10 +141,7 @@ class StrategyEnv(gym.Env):
     def _store_actions_for_rendering(self, action: dict):
         self.last_diplomacy_choice = action["diplomacy"]
         eco_act = action["economy"]
-        
-        # Display as "Build: 2S, 1M"
-        self.last_eco_str = f"Build: {eco_act[0]}S, {eco_act[1]}M"
-        
+        self.last_eco_str = f"Recruit: {eco_act[0]} Soldiers"
         self.dip_labels = ["Trade", "Pass", "Attack"]
         self.last_dip_str = self.dip_labels[self.last_diplomacy_choice]
 
@@ -159,16 +149,13 @@ class StrategyEnv(gym.Env):
         super().reset(seed=seed)
         self.current_turn = 0
         self.player_env.reset()
-        
         self.opponent_env.reset()
-
         self.board_env.reset()
 
         self.lost_gold = 0
         self.lost_wood = 0
         self.lost_food = 0
         self.defeated_workers = 0
-
 
         if self.render_mode == "human":
             self.render()
@@ -178,46 +165,71 @@ class StrategyEnv(gym.Env):
         return observation, info
 
     def step(self, action: Dict[str, int]) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
-
-            
             # 0. Action Extraction
-            reward,terminated, truncated = self._action_extraction(action)
+            reward, terminated, truncated = self._action_extraction(action)
+            
             # 0.1 Workers redistribution (ALWAYS STYLE 0)
             p1_workers = self.player_env.resources[2]
             p2_workers = self.opponent_env.resources[2]
 
-            self.board_env.redistribute_workers(owner_id=1, total_workers=p1_workers, style=0)
+            # redistribute_workers returns True if base is lost
+            p1_lost_base = self.board_env.redistribute_workers(owner_id=1, total_workers=p1_workers, style=0)
+            if p1_lost_base:
+                reward -= 100.0
+                print(f"Player DEFEATED at turn {self.current_turn} due to worker loss!")
+                terminated = True
+            
             self.board_env.redistribute_workers(owner_id=2, total_workers=p2_workers, style=0)
             
+            # Check for early exit
+            if terminated or truncated:
+                return self._finalize_step(reward, terminated, truncated)
+
+            # 0.2 SOLDIER LOGIC
+            self.board_env.move_soldiers()
+            
+            # 0.3 WORKER GROWTH LOGIC (Every 5 turns)
+            if self.current_turn > 0 and self.current_turn % 5 == 0:
+                workers_reward = self.board_env.grow_workers(p1_food_gen=self.player_env.food_net_income)
+                reward += workers_reward
+                print(f"Turn {self.current_turn}: Workers grew!")
+
+            # --- Synchronize total worker counts from grid before resource calculation ---
+            p1_indices = (self.board_env.grid[:, :, 0] == 1)
+            self.player_env.resources[2] = float(np.sum(self.board_env.grid[p1_indices, 2]))
+            
+            p2_indices = (self.board_env.grid[:, :, 0] == 2)
+            self.opponent_env.resources[2] = float(np.sum(self.board_env.grid[p2_indices, 2]))
 
             # 1. Resource calculation 
             player_resources_calculation_result = self.resource_manager.collect_resources(player_id=1)
             self.lost_gold = player_resources_calculation_result.get("lost_gold", 0)
             self.lost_wood = player_resources_calculation_result.get("lost_wood", 0)
             self.defeated_workers = 0
-
-            
             
             # 2. Store Actions for Rendering
             self._store_actions_for_rendering(action)
 
             # 3. --- DIPLOMACY BRANCH ---
-
             action_result = self.diplomacy_branch.execute_diplomacy(diplomacy_action=self.diplomacy_action,
                                                                     target_col=self.target_col,
                                                                     target_row=self.target_row,
                                                                     current_turn=self.current_turn
                                                                     )
 
-            truncated = action_result["truncated"]
+            if action_result.get("terminated"):
+                terminated = True
+            
             reward += action_result["reward"]
             self.defeated_workers += action_result.get("defeated_workers", 0)
             self.history.append(action_result["history"])
 
-            # 4. --- ECONOMY BRANCH ---
+            if terminated or truncated:
+                return self._finalize_step(reward, terminated, truncated)
 
-            economy_action_result = self.economy_branch.execute_economy_action(new_workers=self.workers_to_build,
-                                                                               new_mines=self.mines_to_build,
+            # 4. --- ECONOMY BRANCH ---
+            economy_action_result = self.economy_branch.execute_economy_action(new_soldiers=self.workers_to_build,
+                                                                               mine_action=self.mines_to_build,
                                                                                trade_route_action=self.trade_route_action,
                                                                                warehouse_action=self.warehouse_action,
                                                                                crop_field_action=self.crop_field_action
@@ -229,79 +241,59 @@ class StrategyEnv(gym.Env):
             food_reward = self.player_env.process_food_consumption()
             reward += food_reward
 
-
-            # 5. Turn and Resource Management
+            # 5. Turn Management
             self.current_turn += 1
-            
-            # 6. Turn and Opponent Status
-            # reward -= self.opponent_env.score_calculation() + self.current_turn * 0.1 # Penalty for opponent strength
+            if self.current_turn >= self.max_turns:
+                truncated = True
 
             # 7. Opponent Action
-            # First,redistribute opponent workers to the board so the attack power is correct
             self.board_env.redistribute_workers(owner_id=2, total_workers=self.opponent_env.resources[2], style=0)
-
-            # Get opponent's intent
             intent_to_attack = self.opponent_env.action_step(self.current_turn, self.board_env.get_owned_tiles(owner_id=2))
 
             if intent_to_attack:
-                # The Board determines if the attack succeeds based on worker proximity
-                battle_victory, base_captured, prev_owner, defeated_by_opponent, mine_captured = self.board_env.claim_adjacent_tile(owner_id=2)
+                battle_victory, opp_victory_terminated, prev_owner, defeated_by_opponent, mine_captured = self.board_env.claim_adjacent_tile(owner_id=2)
                 
                 if battle_victory:
                     print("Opponent captured a tile!")
-                    # P2 Gains resources for winning
                     self.opponent_env.resources[0] += 5
                     self.opponent_env.resources[1] += 2
-                    
-                    # Deduct the actual workers lost on the tile from Player 1's total pool
                     if prev_owner == 1:
-                        self.player_env.resources[2] = int(max(0, self.player_env.resources[2] - defeated_by_opponent))
-        
+                        self.player_env.resources[2] = float(max(0, self.player_env.resources[2] - defeated_by_opponent))
                     if mine_captured:
-                        print("Mine captured")
                         reward -= 0.1
                         self.player_env.resources[3] -= 1
-                    if base_captured:
+                    if opp_victory_terminated:
                         reward -= 100.0
-                        truncated = True
+                        terminated = True
                         print(f"Player DEFEATED at turn {self.current_turn}!")
                 else:
-                    # Attack failed (Opponent wasn't strong enough or no adjacent tiles)
-                    # Small penalty to opponent resources for the failed campaign
                     self.opponent_env.resources[2] = max(0, self.opponent_env.resources[2] - self.opponent_env.resources[2]*0.1)
                     reward += 0.1
 
-            
-            self.player_env.resources[3] = int (self.board_env.p1_buildings_manager.get_mine_count(player_id=1))
-
             if self.player_env.resources[0] <= 0:
-                # Bankrupt condition
-                #reward -= 0.01 * abs(self.player_env.resources[0])  # Small penalty for running out of gold        
                 reward -= 5
-                print(f"Player bankrupt! {reward} reward.")
 
-            # 9. Rendering and Return
-            if self.render_mode == "human":
-                self.render()
+            return self._finalize_step(reward, terminated, truncated, player_resources_calculation_result)
 
-            self.board_env.update_board()
+    def _finalize_step(self, reward, terminated, truncated, player_resources_calculation_result=None):
+        if self.render_mode == "human":
+            self.render()
 
-            observation = self._get_obs()
-            info = self._get_info()
+        self.board_env.update_board()
+        observation = self._get_obs()
+        info = self._get_info()
 
+        if player_resources_calculation_result is not None:
             reward += self.reward_env.calculate_player_resources_reward(game_turn = self.current_turn,
                                                                         model_observations=observation,
                                                                         player_resources_result=player_resources_calculation_result)
 
-            return observation, reward, terminated, truncated, info
+        return observation, float(np.clip(reward, -50.0, 50.0)), terminated, truncated, info
 
     def render(self):
-        # 1. Guard clause
         if self.render_mode is None:
             return
 
-
-        # Pack current state into a dictionary
         state_data = {
             'p_res': self.player_env.resources,
             'o_res': self.opponent_env.resources,
@@ -324,10 +316,7 @@ class StrategyEnv(gym.Env):
             "p1_capacity": self.player_env._capacity,
             "p_warehouses": self.board_env.p1_buildings_manager.get_mines_by_owner_and_level(player_id=1, mine_level=2),
             "p_crops": self.board_env.p1_buildings_manager.get_crop_field_count(player_id=1)
-            
         }
-
-        # Call the external renderer
         return self.renderer.render_frame(self.render_mode, state_data)
 
     def close(self):

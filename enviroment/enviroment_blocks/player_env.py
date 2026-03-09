@@ -14,30 +14,34 @@ class PlayerEnv:
         self.gold_raw_income = 0
         self.wood_raw_income = 0
         self.food_raw_income = 0
+        self.food_net_income = 0
         #######Player capacity###################
         
 
     def reset(self, gold=100, wood=50, workers=5, gold_buildings=0, food=50):
         """Initializes player resources."""
         # Index 0: Gold, 1: Wood, 2: Workers, 3: Gold Buildings, 4: Food
-        self._resources = np.array([gold, wood, workers, gold_buildings, food], dtype=np.int32)
+        self._resources = np.array([gold, wood, workers, gold_buildings, food], dtype=np.float64)
         # Index 0: Gold, 1: Wood, 2: Workers, 3: Food
-        self._capacity = np.array([500, 500, 1000, 500], dtype=np.int32)
+        self._capacity = np.array([500, 500, 1000, 5000], dtype=np.float64)
         return self._resources
 
     def process_food_consumption(self) -> float:
         """
         Workers consume food every turn. If food runs out, workers might be lost or penalty applied.
         """
-        food_consumption = self._resources[2] * 0.1 # 1 food per worker
-        self._resources[4] = max(0, self._resources[4] - food_consumption)
+        reward = 0.0
+        # Calculate consumption based on actual workers
+        food_consumption = self._resources[2] * 0.5
+        self._resources[4] = max(0.0, self._resources[4] - food_consumption)
         
         if self._resources[4] <= 0 and self._resources[2] > 0:
             # Starvation penalty: lose 10% of workers if no food
-            lost_workers = max(1, int(self._resources[2] * 0.1))
-            self._resources[2] -= lost_workers
-            print(f"STARVATION: Lost {lost_workers} workers due to lack of food!")
-            return -0.5
+            lost_workers = max(1.0, self._resources[2] * 0.1)
+            self._resources[2] = max(0.0, self._resources[2] - lost_workers)
+            print(f"STARVATION: Lost {int(lost_workers)} workers due to lack of food!")
+            reward -= 0.01
+            return reward
         return 0.0
 
     
@@ -54,39 +58,28 @@ class PlayerEnv:
                     # Rewards for expanding into neutral territory
                     self._resources[0] += 20
                     self._resources[1] += 10
-                    reward += 1 + player_tiles
+                    reward += 0.5  # Fixed small reward for expansion
                     print("Captured neutral tile.")
                 else:
                     # Rewards for successfully raiding the opponent
                     self._resources[0] += 60
                     self._resources[1] += 30
-                    reward += 1.5 * player_tiles
+                    reward += 2.0  # Fixed reward for capturing enemy territory
                     print(f"Captured enemy tile from player {previous_owner}!")
 
                 if base_captured:
-                    reward += 10.0 * player_tiles  # Massive game-winning bonus
-                    
+                    reward += 10.0  # Significant but finite winning bonus
+            
             else:
-                print(f"Player attack failed! Reason: {reason}")
-                # --- Logic for handling failures based on the reason ---
+                # Failure penalties stay small
                 if reason == "not_adjacent":
-                    # The agent tried to "teleport" or jump across the map
-                    reward -= 0.2
-                    
-                elif reason == "already_owned":
-                    # Waste of an action attacking its own territory
                     reward -= 0.1
-                    
+                elif reason == "already_owned":
+                    reward -= 0.05
                 elif reason == "out_of_bounds":
-                    # Trying to click off the map
-                    reward -= 0.5  # Heavy penalty for invalid input logic
-                    
+                    reward -= 0.2
                 elif reason == "insufficient_force":
-                    # Valid move, just not strong enough. 
-                    # Small penalty to encourage building up power first.
                     reward -= 0.01
-                    # You might also lose a tiny bit of power for a failed siege
-                    #self._resources[2] = max(0, self._resources[2] - 1) 
 
             return reward
 

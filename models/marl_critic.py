@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class DynamicBackbone(nn.Module):
-    def __init__(self, in_channels=5, out_features=64):
+    def __init__(self, in_channels=6, out_features=64):
         super().__init__()
         self.conv_block = nn.Sequential(
             nn.Conv2d(in_channels, 32, kernel_size=3, padding=1),
@@ -28,10 +28,10 @@ class EconomicAgent(nn.Module):
             nn.ReLU()
         )
         self.workers_head = nn.Linear(128, 10)
-        self.mines_head = nn.Linear(128, 6)
-        self.trade_head = nn.Linear(128, 6)
-        self.warehouse_head = nn.Linear(128, 2)
-        self.crop_head = nn.Linear(128, 2)
+        self.mines_head = nn.Linear(128, 3)
+        self.trade_head = nn.Linear(128, 2)
+        self.warehouse_head = nn.Linear(128, 3)
+        self.crop_head = nn.Linear(128, 3)
         
     def forward(self, x):
         x = self.common(x)
@@ -53,7 +53,7 @@ class MilitaryAgent(nn.Module):
         return target_logits.view(target_logits.size(0), -1)
 
 class MARL_Strategy(nn.Module):
-    def __init__(self, in_channels=5, stats_dim=27):
+    def __init__(self, in_channels=6, stats_dim=27):
         super().__init__()
         self.backbone = DynamicBackbone(in_channels, out_features=64)
         
@@ -103,22 +103,29 @@ class MARL_Strategy(nn.Module):
             mil_target = mil_target.masked_fill(~target_mask.bool(), -1e4)
         
         if build_mask is not None:
-            # Mines masking (indices 0-5 in build_mask map to mines categories)
-            mines_l = mines_l.masked_fill(~build_mask[:, :6].bool(), -1e4)
+            # build_mask: [MineL1, MineL2, Trade, WH_L1, WH_L2, CropL1, CropL2]
             
-            # Trade masking (index 6 in build_mask)
+            # Mines masking: 0: Nothing (always True), 1: L1 (index 0), 2: L2 (index 1)
+            mines_mask = torch.ones_like(mines_l).bool()
+            mines_mask[:, 1] = build_mask[:, 0].bool()
+            mines_mask[:, 2] = build_mask[:, 1].bool()
+            mines_l = mines_l.masked_fill(~mines_mask, -1e4)
+            
+            # Trade masking (index 2 in build_mask)
             trade_mask = torch.ones_like(trade_l).bool()
-            trade_mask[:, 1] = build_mask[:, 6].bool()
+            trade_mask[:, 1] = build_mask[:, 2].bool()
             trade_l = trade_l.masked_fill(~trade_mask, -1e4)
             
-            # Warehouse masking (index 7 in build_mask)
+            # Warehouse masking: 0: Nothing, 1: L1 (index 3), 2: L2 (index 4)
             wh_mask = torch.ones_like(wh_l).bool()
-            wh_mask[:, 1] = build_mask[:, 7].bool()
+            wh_mask[:, 1] = build_mask[:, 3].bool()
+            wh_mask[:, 2] = build_mask[:, 4].bool()
             wh_l = wh_l.masked_fill(~wh_mask, -1e4)
 
-            # Crop field masking (index 8 in build_mask)
+            # Crop field masking: 0: Nothing, 1: L1 (index 5), 2: L2 (index 6)
             crop_mask = torch.ones_like(crop_l).bool()
-            crop_mask[:, 1] = build_mask[:, 8].bool()
+            crop_mask[:, 1] = build_mask[:, 5].bool()
+            crop_mask[:, 2] = build_mask[:, 6].bool()
             crop_l = crop_l.masked_fill(~crop_mask, -1e4)
             
         # 5. Global Value Judgement

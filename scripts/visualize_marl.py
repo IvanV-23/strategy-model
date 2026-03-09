@@ -18,7 +18,7 @@ def visualize_marl_agent():
 
     # 2. Model Initialization
     # MARL model with the same dimensions used in train_marl.py
-    model = MARL_Strategy(in_channels=5, stats_dim=27)
+    model = MARL_Strategy(in_channels=6, stats_dim=27)
     
     # 3. Load Weights
     model_path = "marl_strategy_optimized.pth"
@@ -71,7 +71,7 @@ def visualize_marl_agent():
             stats_tensor = torch.from_numpy(stats_np).to(torch.float32).unsqueeze(0) / 1000.0
 
             # Masking tensors
-            b_mask = info.get("build_mask", np.ones(8))
+            b_mask = info.get("build_mask", np.ones(7))
             b_mask_tensor = torch.from_numpy(b_mask).to(torch.bool).unsqueeze(0)
             
             t_mask = info.get("action_mask", np.ones(64))

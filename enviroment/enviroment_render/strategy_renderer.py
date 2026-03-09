@@ -123,7 +123,21 @@ class StrategyRenderer:
         # Small door
         door_rect = pygame.Rect(x - 2, y + 2, 4, 6)
         pygame.draw.rect(self.screen, (60, 40, 20), door_rect)
+
+    def _draw_warehouse_lvl2_icon(self, x, y):
+        # Larger stone body
+        body_rect = pygame.Rect(x - 10, y - 4, 20, 14)
+        pygame.draw.rect(self.screen, (150, 150, 160), body_rect)
+        pygame.draw.rect(self.screen, (0, 0, 0), body_rect, 1)
         
+        # Slanted roof with shingles effect
+        roof_pts = [(x - 13, y - 4), (x, y - 14), (x + 13, y - 4)]
+        pygame.draw.polygon(self.screen, (80, 40, 30), roof_pts)
+        pygame.draw.polygon(self.screen, (0, 0, 0), roof_pts, 1)
+        
+        # Double doors
+        pygame.draw.rect(self.screen, (50, 30, 10), [x - 4, y + 2, 8, 8])
+
     def _draw_progress_bar(self, x, y, width, height, current, maximum, color):
         # Background (Empty bar)
         bg_rect = pygame.Rect(x, y, width, height)
@@ -178,6 +192,12 @@ class StrategyRenderer:
         for i in range(-8, 9, 4):
             pygame.draw.line(self.screen, self.COLORS["food"], (x + i, y + 8), (x + i, y - 4), 2)
             pygame.draw.circle(self.screen, (200, 255, 50), (x + i, y - 6), 2)
+
+    def _draw_crop_field_lvl2_icon(self, x, y):
+        # Brighter, thicker stalks for Lvl 2
+        for i in range(-10, 11, 4):
+            pygame.draw.line(self.screen, (50, 255, 50), (x + i, y + 8), (x + i, y - 6), 3)
+            pygame.draw.circle(self.screen, (255, 255, 50), (x + i, y - 8), 3)
 
     def _draw_food_icon(self, x, y):
         # Draw a small stalk/wheat
@@ -270,6 +290,14 @@ class StrategyRenderer:
                         self._draw_crop_field_icon(rect.centerx, rect.centery)
                         level_txt = tiny_font.render("F", True, (255, 255, 255))
                         self.screen.blit(level_txt, (rect.centerx + 8, rect.centery + 2))
+                    elif status == 6: # Warehouse Lvl 2
+                        self._draw_warehouse_lvl2_icon(rect.centerx, rect.centery)
+                        level_txt = tiny_font.render("2", True, (0, 255, 100))
+                        self.screen.blit(level_txt, (rect.centerx + 8, rect.centery + 2))
+                    elif status == 7: # Crop Field Lvl 2
+                        self._draw_crop_field_lvl2_icon(rect.centerx, rect.centery)
+                        level_txt = tiny_font.render("2", True, (0, 255, 100))
+                        self.screen.blit(level_txt, (rect.centerx + 8, rect.centery + 2))
                     # 3. Workers
                     if tile["workers"] > 0:
                         txt_col = (255, 255, 255) if tile["owner"] != 0 else (120, 120, 130)
@@ -277,7 +305,11 @@ class StrategyRenderer:
                         text_rect = worker_surf.get_rect(midbottom=(rect.centerx, rect.bottom - 2))
                         self.screen.blit(worker_surf, text_rect)
 
-                    # 4. Grid Lines
+                    # 4. Soldiers (NEW)
+                    if tile.get("soldiers", 0) > 0:
+                        self._draw_soldier(rect.centerx, rect.centery, tile["soldiers"])
+
+                    # 5. Grid Lines
                     pygame.draw.rect(self.screen, self.COLORS["grid"], rect, 1)
 
             # --- LAYER 4: SELECTION HIGHLIGHT ---
@@ -286,6 +318,19 @@ class StrategyRenderer:
                 t_rect = pygame.Rect(start_x + tc * cell_size, start_y + tr * cell_size, cell_size, cell_size)
                 # Draw a thick neon border for the current action target
                 pygame.draw.rect(self.screen, self.COLORS["action"], t_rect, 3)
+
+    def _draw_soldier(self, x, y, count):
+        """Draws a circle representing soldiers."""
+        radius = 12
+        pygame.draw.circle(self.screen, (255, 50, 50), (x, y), radius)
+        # Draw a small white border
+        pygame.draw.circle(self.screen, (255, 255, 255), (x, y), radius, 1)
+        # Draw count if multiple
+        if count > 1:
+            small_font = pygame.font.Font(None, 18)
+            count_surf = small_font.render(str(count), True, (255, 255, 255))
+            count_rect = count_surf.get_rect(center=(x, y))
+            self.screen.blit(count_surf, count_rect)
 
     def draw_resource_icons(self, count, start_x, start_y):
         for i in range(int(count)):

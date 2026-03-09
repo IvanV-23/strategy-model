@@ -47,7 +47,7 @@ class StrategyLightningModule(pl.LightningModule):
         self.reward_scaling_factor = 1e-1
 
         # MARL Model initialization
-        self.model = MARL_Strategy(in_channels=5, stats_dim=27)
+        self.model = MARL_Strategy(in_channels=6, stats_dim=27)
         
         # Optimize model if not on Windows (torch.compile is better supported on Linux)
         if hasattr(torch, "compile") and sys.platform != "win32":
@@ -86,6 +86,9 @@ class StrategyLightningModule(pl.LightningModule):
             else:
                 t_mask = info_batch[0].to(device, dtype=torch.bool, non_blocking=True)
                 b_mask = info_batch[1].to(device, dtype=torch.bool, non_blocking=True)
+        else:
+            t_mask = torch.ones((1, 256), device=device, dtype=torch.bool)
+            b_mask = torch.ones((1, 7), device=device, dtype=torch.bool)
 
         # --- Logging ---
         if log and "player_resources" in obs_batch:
@@ -310,6 +313,24 @@ class StrategyLightningModule(pl.LightningModule):
             pin_memory=(self.device.type == "cuda")
         )
 
+    def predict_step(self, batch, batch_idx):
+        obs, info = batch
+        boards, stats, t_mask, b_mask = self._process_obs(obs, info, log=False)
+        
+        with torch.no_grad():
+            res = self.model(boards, stats, target_mask=t_mask, build_mask=b_mask)
+        
+        # --- LOG INFERENCE DATA ---
+        # Check if the model is confident or confused
+        prob_dist = torch.softmax(res["dip"], dim=-1)
+        max_prob = prob_dist.max().item()
+        
+        self.log("inference/max_action_confidence", max_prob)
+        self.log("inference/stats_mean", stats.mean().item())
+        
+        # Return the action (deterministic for testing)
+        return torch.argmax(res["dip"], dim=-1)
+
 def train_agent_lightning():
     # Performance setup
     BATCH_SIZE, BUFFER_CAP, COLLECT_STEPS, EPOCHS, LR = 128, 10000, 1024, 1000, 3e-5
@@ -323,11 +344,11 @@ def train_agent_lightning():
     trainer = pl.Trainer(
         max_epochs=EPOCHS,
         gradient_clip_val=0.5,
-        precision="16-mixed", 
+        precision="32", 
         logger=MLFlowLogger(experiment_name="MARL_Strategy_Optimized", tracking_uri="file:./ml-runs"),
-        callbacks=[EarlyStopping(monitor='loss/total', patience=50, mode='min')],
+        callbacks=[EarlyStopping(monitor='loss/total', patience=20, mode='min')],
         log_every_n_steps=10,
-        limit_train_batches=200 
+        limit_train_batches=100 
     )
 
     trainer.fit(model)

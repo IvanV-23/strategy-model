@@ -18,7 +18,7 @@ class DiplomacyEnv:
             reward -= current_turn*0.001
             action_result =    {"reward":reward,
                                 "history":f"Pass",
-                                "truncated":False,
+                                "terminated":False,
                                 "defeated_workers": 0
                                 }
         if diplomacy_action == 2:
@@ -55,7 +55,7 @@ class DiplomacyEnv:
                 }
 
     def attack(self,target_row,target_col):
-        truncated = False
+        terminated = False
         reward = 0
         # 1. Ask the board to resolve combat based on spatial worker distribution
         # Note: claim_adjacent_tile now handles 'Attack Power > Defense' internally
@@ -80,11 +80,11 @@ class DiplomacyEnv:
 
         # 4. Handle game termination
         if base_captured:
-            truncated = True
+            terminated = True
             print(f"Opponent defeated! Total Reward: {reward}")
 
         return {"reward":reward,
                 "history":f"Attack on ({target_row},{target_col}): {res_msg}",
-                "truncated":truncated,
+                "terminated":terminated,
                 "defeated_workers": defeated_workers
                 }
