@@ -20,13 +20,13 @@ class ReplayBuffer:
         self.next_stats = np.zeros((capacity, self.stats_dim), dtype=np.float32)
 
         self.actions_diplomacy = np.zeros((capacity,), dtype=np.int64)
-        self.actions_economy = np.zeros((capacity, 5), dtype=np.int64) 
+        self.actions_economy = np.zeros((capacity, 6), dtype=np.int64) 
         self.actions_target = np.zeros((capacity,), dtype=np.int64)
         
         # Masking dimensions from action space and build mask
         target_dim = action_space["target_tile"].n
         self.masks_target = np.ones((capacity, target_dim), dtype=np.bool_)
-        self.masks_build = np.ones((capacity, 7), dtype=np.bool_)
+        self.masks_build = np.ones((capacity, 8), dtype=np.bool_)
 
         self.rewards = np.zeros((capacity,), dtype=np.float32)
         self.terminated = np.zeros((capacity,), dtype=np.bool_)

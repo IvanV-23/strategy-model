@@ -39,22 +39,18 @@ class StrategyLightningModule(pl.LightningModule):
         self.batch_size = batch_size
         self.lam = lam
         
-        # Hyperparameters
         self.entropy_coeff = 0.01
-        self.entropy_decay = 0.99 # Slower decay
-        self.min_entropy = 0.001    # Higher minimum entropy to maintain exploration
+        self.entropy_decay = 0.99
+        self.min_entropy = 0.001
         self.value_loss_coeff = 0.1
         self.reward_scaling_factor = 1e-1
 
         # MARL Model initialization
-        self.model = MARL_Strategy(in_channels=6, stats_dim=27)
+        self.model = MARL_Strategy(in_channels=8, stats_dim=27)
         
-        # Optimize model if not on Windows (torch.compile is better supported on Linux)
         if hasattr(torch, "compile") and sys.platform != "win32":
-            try:
-                self.model = torch.compile(self.model)
-            except Exception:
-                pass
+            try: self.model = torch.compile(self.model)
+            except Exception: pass
         
         self.obs, self.info = self.env.reset()
         self.total_reward = 0
@@ -65,8 +61,6 @@ class StrategyLightningModule(pl.LightningModule):
         device = self.device
         if "board_stats" in obs_batch: # Single step collection
             boards = torch.from_numpy(obs_batch["board_state"]).to(device, dtype=torch.float32, non_blocking=True).unsqueeze(0) / 255.0
-            
-            # Efficiently combine stats
             stats_np = np.concatenate([
                 obs_batch["player_resources"],
                 obs_batch["opponent_resources"],
@@ -88,74 +82,24 @@ class StrategyLightningModule(pl.LightningModule):
                 b_mask = info_batch[1].to(device, dtype=torch.bool, non_blocking=True)
         else:
             t_mask = torch.ones((1, 256), device=device, dtype=torch.bool)
-            b_mask = torch.ones((1, 7), device=device, dtype=torch.bool)
+            b_mask = torch.ones((1, 8), device=device, dtype=torch.bool)
 
-        # --- Logging ---
         if log and "player_resources" in obs_batch:
             res = torch.as_tensor(obs_batch["player_resources"], dtype=torch.float32)
             if res.dim() == 1:
                 self.log("game_stats/player_gold", res[0])
                 self.log("game_stats/player_wood", res[1])
                 self.log("game_stats/player_workers", res[2])
-                self.log("game_stats/player_mines", res[3])
-                self.log("game_stats/player_food", res[4])
-                self.log("game_stats/gold_capacity", res[5])
-                self.log("game_stats/wood_capacity", res[6])
-                self.log("game_stats/worker_capacity", res[7])
-                self.log("game_stats/food_capacity", res[8])
             else:
                 self.log("game_stats/player_gold", res[:, 0].mean())
                 self.log("game_stats/player_wood", res[:, 1].mean())
                 self.log("game_stats/player_workers", res[:, 2].mean())
-                self.log("game_stats/player_mines", res[:, 3].mean())
-                self.log("game_stats/player_food", res[:, 4].mean())
-                self.log("game_stats/gold_capacity", res[:, 5].mean())  
-                self.log("game_stats/wood_capacity", res[:, 6].mean())
-                self.log("game_stats/worker_capacity", res[:, 7].mean())
-                self.log("game_stats/food_capacity", res[:, 8].mean())
         
-        # In batch mode, board_stats info is in 'mine_stats'
-        stats_raw = obs_batch.get("board_stats") if "board_stats" in obs_batch else obs_batch.get("mine_stats")
-        if log and stats_raw is not None:
-            stats_raw = torch.as_tensor(stats_raw, dtype=torch.float32)
-            if stats_raw.dim() > 1:
-                self.log("game_stats/mines", stats_raw[:, 1].mean())
-                self.log("game_stats/gold_income", stats_raw[:, 2].mean())
-                self.log("game_stats/wood_income", stats_raw[:, 3].mean())
-                self.log("game_stats/trade_routes", stats_raw[:, 4].mean())
-                self.log("game_stats/p1_tiles", stats_raw[:, 5].mean())
-                self.log("game_stats/p2_tiles", stats_raw[:, 6].mean())
-                self.log("game_stats/potential_trade_routes", stats_raw[:, 7].mean())
-                self.log("game_stats/crop_fields", stats_raw[:, 8].mean())
-                self.log("game_stats/net_income", stats_raw[:, 9].mean())
-                self.log("game_stats/lost_gold", stats_raw[:, 10].mean())
-                self.log("game_stats/lost_wood", stats_raw[:, 11].mean())
-                self.log("game_stats/lost_food", stats_raw[:, 12].mean())
-                self.log("game_stats/defeated_workers", stats_raw[:, 13].mean())
-            else:
-                self.log("game_stats/mines", stats_raw[1])
-                self.log("game_stats/gold_income", stats_raw[2])
-                self.log("game_stats/wood_income", stats_raw[3])
-                self.log("game_stats/trade_routes", stats_raw[4])
-                self.log("game_stats/p1_tiles", stats_raw[5])
-                self.log("game_stats/p2_tiles", stats_raw[6])
-                self.log("game_stats/potential_trade_routes", stats_raw[7])
-                self.log("game_stats/crop_fields", stats_raw[8])
-                self.log("game_stats/net_income", stats_raw[9])
-                self.log("game_stats/lost_gold", stats_raw[10])
-                self.log("game_stats/lost_wood", stats_raw[11])
-                self.log("game_stats/lost_food", stats_raw[12])
-                self.log("game_stats/defeated_workers", stats_raw[13])
-
         return boards, stats, t_mask, b_mask
 
     def _compute_gae(self, trajectory, last_obs, last_info, start_idx):
         rewards = np.array([e['reward'] for e in trajectory]) * self.reward_scaling_factor
-
-        # 2. APPLY REWARD
-        # This prevents bankruptcy (-1.94) from being an extreme outlier
         rewards = np.clip(rewards, -5.0, 5.0)
-
         values = np.array([e['value'] for e in trajectory])
         dones = np.array([e['done'] for e in trajectory])
         
@@ -177,9 +121,7 @@ class StrategyLightningModule(pl.LightningModule):
         self.buffer.store_gae(start_idx, advantages, returns)
 
     def _prefill_buffer(self):
-        if self.buffer.size >= self.batch_size:
-            return
-
+        if self.buffer.size >= self.batch_size: return
         print(f"Pre-filling buffer with {self.batch_size} steps...")
         while self.buffer.size < self.batch_size:
             board_t, stats_t, t_mask, b_mask = self._process_obs(self.obs, self.info, log=False)
@@ -187,29 +129,18 @@ class StrategyLightningModule(pl.LightningModule):
                 res = self.model(board_t, stats_t, target_mask=t_mask, build_mask=b_mask)
             
             eco_l = res["eco"]
-            mil_l = res["mil"]
-            dip_l = res["dip"]
-
             action = {
-                "diplomacy": torch.distributions.Categorical(logits=dip_l).sample().item(),
-                "economy": [
-                    torch.distributions.Categorical(logits=eco_l[0]).sample().item(),
-                    torch.distributions.Categorical(logits=eco_l[1]).sample().item(),
-                    torch.distributions.Categorical(logits=eco_l[2]).sample().item(),
-                    torch.distributions.Categorical(logits=eco_l[3]).sample().item(),
-                    torch.distributions.Categorical(logits=eco_l[4]).sample().item()
-                ],
-                "target_tile": torch.distributions.Categorical(logits=mil_l).sample().item()
+                "diplomacy": torch.distributions.Categorical(logits=res["dip"]).sample().item(),
+                "economy": [torch.distributions.Categorical(logits=l).sample().item() for l in eco_l],
+                "target_tile": torch.distributions.Categorical(logits=res["mil"]).sample().item()
             }
 
             next_obs, reward, terminated, truncated, next_info = self.env.step(action)
             self.buffer.add(self.obs, action, reward, next_obs, terminated, truncated, self.info)
             self.obs, self.info = next_obs, next_info
-            if terminated or truncated:
-                self.obs, self.info = self.env.reset()
+            if terminated or truncated: self.obs, self.info = self.env.reset()
 
-    def on_fit_start(self):
-        self._prefill_buffer()
+    def on_fit_start(self): self._prefill_buffer()
 
     def on_train_epoch_start(self):
         trajectory_data = []
@@ -220,127 +151,56 @@ class StrategyLightningModule(pl.LightningModule):
                 res = self.model(board_t, stats_t, target_mask=t_mask, build_mask=b_mask)
             
             eco_l = res["eco"]
-            mil_l = res["mil"]
-            dip_l = res["dip"]
-
             action = {
-                "diplomacy": torch.distributions.Categorical(logits=dip_l).sample().item(),
-                "economy": [
-                    torch.distributions.Categorical(logits=eco_l[0]).sample().item(),
-                    torch.distributions.Categorical(logits=eco_l[1]).sample().item(),
-                    torch.distributions.Categorical(logits=eco_l[2]).sample().item(),
-                    torch.distributions.Categorical(logits=eco_l[3]).sample().item(),
-                    torch.distributions.Categorical(logits=eco_l[4]).sample().item()
-                ],
-                "target_tile": torch.distributions.Categorical(logits=mil_l).sample().item()
+                "diplomacy": torch.distributions.Categorical(logits=res["dip"]).sample().item(),
+                "economy": [torch.distributions.Categorical(logits=l).sample().item() for l in eco_l],
+                "target_tile": torch.distributions.Categorical(logits=res["mil"]).sample().item()
             }
 
             next_obs, reward, terminated, truncated, next_info = self.env.step(action)
             self.total_reward += reward
-
             trajectory_data.append({'reward': reward, 'value': res["value"].item(), 'done': terminated or truncated})
             self.buffer.add(self.obs, action, reward, next_obs, terminated, truncated, self.info)
-
             self.obs, self.info = next_obs, next_info
             if terminated or truncated:
-                self.log("episode/total_reward", self.total_reward, prog_bar=True)
-                self.total_reward = 0
+                self.log("episode/total_reward", self.total_reward, prog_bar=True); self.total_reward = 0
                 self.obs, self.info = self.env.reset()
-
         self._compute_gae(trajectory_data, self.obs, self.info, start_idx)
 
     def training_step(self, batch, batch_idx):
         (states, a_dip, a_eco, a_target, rewards, _, t_d, t_c, m_target, m_build, pre_adv, pre_returns) = batch
-
         boards, stats, t_mask, b_mask = self._process_obs(states, (m_target, m_build))
         res = self.model(boards, stats, target_mask=t_mask, build_mask=b_mask)
-        def stabilize_logits(logits):
-                # Replace NaNs with 0.0 and clamp to prevent Exp(logits) from exploding
-                logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
-                return torch.clamp(logits, min=-20, max=20)
+        def stab(l): return torch.clamp(torch.nan_to_num(l, nan=0.0, posinf=20.0, neginf=-20.0), -20, 20)
         
-        res["dip"] = stabilize_logits(res["dip"])
-        res["eco"] = [stabilize_logits(l) for l in res["eco"]]
-        res["mil"] = stabilize_logits(res["mil"])
-        
+        res["dip"], res["mil"] = stab(res["dip"]), stab(res["mil"])
+        res["eco"] = [stab(l) for l in res["eco"]]
         adv = (pre_adv - pre_adv.mean()) / (pre_adv.std() + 1e-8)
 
-        # Vectorized distribution operations
-        d_dip = torch.distributions.Categorical(logits=res["dip"])
-        d_wor = torch.distributions.Categorical(logits=res["eco"][0])
-        d_min = torch.distributions.Categorical(logits=res["eco"][1])
-        d_tra = torch.distributions.Categorical(logits=res["eco"][2])
-        d_wh  = torch.distributions.Categorical(logits=res["eco"][3])
-        d_cro = torch.distributions.Categorical(logits=res["eco"][4])
-        d_tar = torch.distributions.Categorical(logits=res["mil"])
+        d_dip, d_tar = torch.distributions.Categorical(logits=res["dip"]), torch.distributions.Categorical(logits=res["mil"])
+        d_eco = [torch.distributions.Categorical(logits=l) for l in res["eco"]]
 
-        lp = (d_dip.log_prob(a_dip) + 
-              d_wor.log_prob(a_eco[:, 0]) +
-              d_min.log_prob(a_eco[:, 1]) + 
-              d_tra.log_prob(a_eco[:, 2]) + 
-              d_wh.log_prob(a_eco[:, 3]) + 
-              d_cro.log_prob(a_eco[:, 4]) + 
-              d_tar.log_prob(a_target))
+        lp = d_dip.log_prob(a_dip) + d_tar.log_prob(a_target)
+        for i in range(len(d_eco)): lp += d_eco[i].log_prob(a_eco[:, i])
 
         actor_loss = -(lp * adv).mean()
         critic_loss = F.huber_loss(res["value"].view(-1), pre_returns.view(-1), delta=1.0)
-        
-        entropy = (d_dip.entropy() + d_wor.entropy() + d_min.entropy() + 
-                   d_tra.entropy() + d_wh.entropy() + d_cro.entropy() + 
-                   d_tar.entropy()).mean()
+        entropy = (d_dip.entropy() + d_tar.entropy() + sum(d.entropy() for d in d_eco)).mean()
 
         total_loss = actor_loss + (self.value_loss_coeff * critic_loss) - (self.entropy_coeff * entropy)
-
-        self.log_dict({
-            "loss/total": total_loss,
-            "loss/actor": actor_loss,
-            "loss/critic": critic_loss,
-            "stats/entropy": entropy
-        }, on_step=False, on_epoch=True, prog_bar=True)
-
+        self.log_dict({"loss/total": total_loss, "loss/actor": actor_loss, "loss/critic": critic_loss}, on_step=False, on_epoch=True, prog_bar=True)
         return total_loss
 
-    def on_train_epoch_end(self):
-        self.entropy_coeff = max(self.min_entropy, self.entropy_coeff * self.entropy_decay)
-
-    def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.lr)
-
-    def train_dataloader(self):
-        return DataLoader(
-            RLDataset(self.buffer, self.batch_size), 
-            batch_size=None,
-            pin_memory=(self.device.type == "cuda")
-        )
-
-    def predict_step(self, batch, batch_idx):
-        obs, info = batch
-        boards, stats, t_mask, b_mask = self._process_obs(obs, info, log=False)
-        
-        with torch.no_grad():
-            res = self.model(boards, stats, target_mask=t_mask, build_mask=b_mask)
-        
-        # --- LOG INFERENCE DATA ---
-        # Check if the model is confident or confused
-        prob_dist = torch.softmax(res["dip"], dim=-1)
-        max_prob = prob_dist.max().item()
-        
-        self.log("inference/max_action_confidence", max_prob)
-        self.log("inference/stats_mean", stats.mean().item())
-        
-        # Return the action (deterministic for testing)
-        return torch.argmax(res["dip"], dim=-1)
+    def on_train_epoch_end(self): self.entropy_coeff = max(self.min_entropy, self.entropy_coeff * self.entropy_decay)
+    def configure_optimizers(self): return torch.optim.Adam(self.parameters(), lr=self.lr)
+    def train_dataloader(self): return DataLoader(RLDataset(self.buffer, self.batch_size), batch_size=None)
 
 def train_agent_lightning():
-    # Performance setup
     BATCH_SIZE, BUFFER_CAP, COLLECT_STEPS, EPOCHS, LR = 128, 10000, 1024, 1000, 3e-5
     torch.set_float32_matmul_precision('high')
-
     env = StrategyEnv()
     replay_buffer = ReplayBuffer(BUFFER_CAP, env.observation_space, env.action_space)
-
     model = StrategyLightningModule(env, replay_buffer, LR, COLLECT_STEPS, batch_size=BATCH_SIZE)
-
     trainer = pl.Trainer(
         max_epochs=EPOCHS,
         gradient_clip_val=0.5,

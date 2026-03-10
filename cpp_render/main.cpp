@@ -76,7 +76,6 @@ public:
 
         draw_ui(state);
         
-        // --- Layered Board Rendering ---
         if (state.contains("board")) {
             const auto& board = state["board"];
             int rows = (int)board.size();
@@ -85,13 +84,8 @@ public:
             int start_x = (width - (cols * cell_size)) / 2;
             int start_y = 200;
 
-            // 1. Tile Backgrounds
             draw_board_backgrounds(state, start_x, start_y, rows, cols, cell_size);
-            
-            // 2. Trade Routes (Drawn on top of backgrounds)
             draw_routes(state, start_x, start_y, cell_size);
-            
-            // 3. Tile Content (Icons, Text, Grid)
             draw_board_content(state, start_x, start_y, rows, cols, cell_size);
         }
 
@@ -122,41 +116,17 @@ private:
     }
 
     void draw_routes(const json& state, int start_x, int start_y, int cell_size) {
-        // P1 Routes
         if (state.contains("p1_routes") && state.contains("p1_base")) {
             auto base = state["p1_base"];
             int bx = start_x + base[1].get<int>() * cell_size + cell_size / 2;
             int by = start_y + base[0].get<int>() * cell_size + cell_size / 2;
-
-            SDL_SetRenderDrawColor(renderer, 0, 255, 255, 255); // Cyan
+            SDL_SetRenderDrawColor(renderer, 0, 255, 255, 255); 
             for (auto& route : state["p1_routes"]) {
                 int mx = start_x + route[1].get<int>() * cell_size + cell_size / 2;
                 int my = start_y + route[0].get<int>() * cell_size + cell_size / 2;
-                
-                // Draw a 3-pixel thick line by offsetting slightly
                 SDL_RenderDrawLine(renderer, bx, by, mx, my);
                 SDL_RenderDrawLine(renderer, bx+1, by, mx+1, my);
                 SDL_RenderDrawLine(renderer, bx, by+1, mx, my+1);
-                
-                draw_circle(mx, my, 4);
-            }
-        }
-
-        // P2 Routes
-        if (state.contains("o1_routes") && state.contains("o1_base")) {
-            auto base = state["o1_base"];
-            int bx = start_x + base[1].get<int>() * cell_size + cell_size / 2;
-            int by = start_y + base[0].get<int>() * cell_size + cell_size / 2;
-
-            SDL_SetRenderDrawColor(renderer, 255, 120, 0, 255); // Orange
-            for (auto& route : state["o1_routes"]) {
-                int mx = start_x + route[1].get<int>() * cell_size + cell_size / 2;
-                int my = start_y + route[0].get<int>() * cell_size + cell_size / 2;
-                
-                SDL_RenderDrawLine(renderer, bx, by, mx, my);
-                SDL_RenderDrawLine(renderer, bx+1, by, mx+1, my);
-                SDL_RenderDrawLine(renderer, bx, by+1, mx, my+1);
-                
                 draw_circle(mx, my, 4);
             }
         }
@@ -169,16 +139,22 @@ private:
                 SDL_Rect rect = {start_x + c * cell_size, start_y + r * cell_size, cell_size, cell_size};
                 const auto& tile = board[r][c];
 
-                // Grid
+                // --- Fortification Highlight (Blue Border) ---
+                if (tile.contains("fortified") && tile["fortified"].get<int>() > 0) {
+                    SDL_SetRenderDrawColor(renderer, 0, 100, 255, 255);
+                    for(int i=0; i<3; ++i) { // 3px border
+                        SDL_Rect border = {rect.x+i, rect.y+i, rect.w-2*i, rect.h-2*i};
+                        SDL_RenderDrawRect(renderer, &border);
+                    }
+                }
+
                 SDL_SetRenderDrawColor(renderer, 60, 60, 70, 255);
                 SDL_RenderDrawRect(renderer, &rect);
 
-                // Wood
                 if (tile.contains("wood") && tile["wood"].get<int>() > 0) {
                     draw_wood_icon(rect.x + 5, rect.y + 5);
                 }
 
-                // Buildings
                 int status = tile["status"];
                 if (status == 1) draw_mine_icon(rect.x + cell_size / 2, rect.y + cell_size / 2, 1);
                 else if (status == 2) draw_warehouse_icon(rect.x + cell_size / 2, rect.y + cell_size / 2, 1);
@@ -188,14 +164,16 @@ private:
                 else if (status == 6) draw_warehouse_icon(rect.x + cell_size / 2, rect.y + cell_size / 2, 2);
                 else if (status == 7) draw_crop_field_icon(rect.x + cell_size / 2, rect.y + cell_size / 2, 2);
 
-                // Workers
                 if (tile.contains("workers") && tile["workers"].get<double>() > 0) {
                      draw_text(std::to_string((int)tile["workers"].get<double>()), rect.x + 15, rect.y + 22, {255, 255, 255, 255}, true);
                 }
 
-                // Soldiers
                 if (tile.contains("soldiers") && tile["soldiers"].get<int>() > 0) {
-                    draw_soldier_icon(rect.x + cell_size / 2, rect.y + cell_size / 2, tile["soldiers"].get<int>());
+                    draw_soldier_icon(rect.x + cell_size / 2, rect.y + cell_size / 2, tile["soldiers"].get<int>(), {255, 50, 50, 255});
+                }
+                
+                if (tile.contains("p2_soldiers") && tile["p2_soldiers"].get<int>() > 0) {
+                    draw_soldier_icon(rect.x + cell_size / 2, rect.y + cell_size / 2, tile["p2_soldiers"].get<int>(), {255, 120, 0, 255});
                 }
             }
         }
@@ -283,8 +261,8 @@ private:
         SDL_RenderFillRect(renderer, &log);
     }
 
-    void draw_soldier_icon(int x, int y, int count) {
-        SDL_SetRenderDrawColor(renderer, 255, 50, 50, 255);
+    void draw_soldier_icon(int x, int y, int count, SDL_Color color) {
+        SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
         fill_circle(x, y, 12);
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
         draw_circle(x, y, 12);
