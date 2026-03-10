@@ -10,105 +10,68 @@ import numpy as np
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from enviroment.strategy_env import StrategyEnv
-from models.marl_critic import MARL_Strategy
+from models.marl_critic import MARL_Strategy, SoldierAgent
 
 def visualize_marl_agent():
     # 1. Environment Setup
     env = StrategyEnv(render_mode="human")
 
     # 2. Model Initialization
-    # MARL model with the same dimensions used in train_marl.py
     model = MARL_Strategy(in_channels=8, stats_dim=27)
+    soldier_model = SoldierAgent(in_channels=8, goal_dim=16) # Tactical Agent
     
     # 3. Load Weights
     model_path = "marl_strategy_optimized.pth"
-    if not os.path.exists(model_path):
-        model_path = "marl_strategy_model.pth"
-
     if os.path.exists(model_path):
         print(f"Loading weights from {model_path}")
         state_dict = torch.load(model_path, weights_only=True, map_location="cpu")
-        # Handle potential 'model.' prefix if saved from Lightning
         new_state_dict = {}
         for k, v in state_dict.items():
-            if k.startswith('model.'):
-                new_state_dict[k[6:]] = v
-            else:
-                new_state_dict[k] = v
+            if k.startswith('model.'): new_state_dict[k[6:]] = v
+            else: new_state_dict[k] = v
         model.load_state_dict(new_state_dict, strict=True)
-    else:
-        print(f"Warning: No model found at '{model_path}'. Visualizing random agent.")
     
-    model.eval() 
+    model.eval()
+    soldier_model.eval()
 
     obs, info = env.reset()
+    current_goal = None
     running = True
     
     use_cpp = os.getenv("USE_CPP_RENDER") == "1"
-    if use_cpp:
-        print("Starting MARL visualization loop with C++ external renderer.")
-    else:
-        print("Starting MARL visualization loop. Close the Pygame window to stop.")
+    print("Starting HRL visualization loop.")
 
     while running:
-        # Prevent Pygame from hanging
         if not use_cpp:
             for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
+                if event.type == pygame.QUIT: running = False
 
-        # 4. Prepare inputs
         with torch.no_grad():
-            board_tensor = torch.from_numpy(obs["board_state"]).to(torch.float32).unsqueeze(0) / 255.0
-            
-            # Match the _process_obs logic from train_marl.py
-            stats_np = np.concatenate([
-                obs["player_resources"],
-                obs["opponent_resources"],
-                obs["board_stats"],
-                [obs["turn_number"]]
-            ]).astype(np.float32)
-            stats_tensor = torch.from_numpy(stats_np).to(torch.float32).unsqueeze(0) / 1000.0
+            board_t = torch.from_numpy(obs["board_state"]).to(torch.float32).unsqueeze(0) / 255.0
+            stats_np = np.concatenate([obs["player_resources"], obs["opponent_resources"], obs["board_stats"], [obs["turn_number"]]]).astype(np.float32)
+            stats_t = torch.from_numpy(stats_np).to(torch.float32).unsqueeze(0) / 1000.0
 
-            # Masking tensors
-            b_mask = info.get("build_mask", np.ones(7))
-            b_mask_tensor = torch.from_numpy(b_mask).to(torch.bool).unsqueeze(0)
-            
-            t_mask = info.get("action_mask", np.ones(64))
-            t_mask_tensor = torch.from_numpy(t_mask).to(torch.bool).unsqueeze(0)
+            b_mask = info.get("build_mask", np.ones(8))
+            b_mask_t = torch.from_numpy(b_mask).to(torch.bool).unsqueeze(0)
+            t_mask_t = torch.from_numpy(info.get("action_mask", np.ones(256))).to(torch.bool).unsqueeze(0)
 
-            # 5. Model Inference
-            res = model(
-                board_tensor, 
-                stats_tensor, 
-                target_mask=t_mask_tensor,
-                build_mask=b_mask_tensor
-            )
+            res = model(board_t, stats_t, target_mask=t_mask_t, build_mask=b_mask_t)
             
-            eco_l = res["eco"] # (workers, mines, trade, warehouse, crop, fortify)
-            mil_target = res["mil"]
-            dip_l = res["dip"]
+            # HRL: Update goal every 10 turns
+            if env.current_turn % 10 == 0:
+                current_goal = res["goal"]
 
-            # 7. Action Selection (Greedy/Argmax)
+            eco_l = res["eco"]
             action = {
-                "diplomacy": torch.argmax(dip_l, dim=1).item(),
-                "economy": [
-                    torch.argmax(eco_l[0], dim=1).item(),
-                    torch.argmax(eco_l[1], dim=1).item(),
-                    torch.argmax(eco_l[2], dim=1).item(),
-                    torch.argmax(eco_l[3], dim=1).item(),
-                    torch.argmax(eco_l[4], dim=1).item(),
-                    torch.argmax(eco_l[5], dim=1).item()
-                ],
-                "target_tile": torch.argmax(mil_target, dim=1).item()
+                "diplomacy": torch.argmax(res["dip"], dim=1).item(),
+                "economy": [torch.argmax(l, dim=1).item() for l in eco_l],
+                "target_tile": torch.argmax(res["mil"], dim=1).item()
             }
 
-        # 8. Step environment
-        obs, reward, terminated, truncated, info = env.step(action)
+        # 8. Step environment with HRL parameters
+        obs, reward, terminated, truncated, info = env.step(action, soldier_model, current_goal)
 
-        # Slow down for visibility
         time.sleep(0.2) 
-
         if terminated or truncated:
             print(f"Episode Finished. Resetting...")
             obs, info = env.reset()

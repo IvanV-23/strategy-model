@@ -127,9 +127,9 @@ class StrategyEnv(gym.Env):
         if self.render_mode == "human": self.render()
         return self._get_obs(), self._get_info()
 
-    def step(self, action: Dict[str, int]) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
+    def step(self, action: Dict[str, int], soldier_agent=None, p1_goal=None) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
         reward, terminated, truncated = self._action_extraction(action)
-        
+
         # 0.1 Workers redistribution
         if self.board_env.redistribute_workers(owner_id=1, total_workers=self.player_env.resources[2]):
             reward -= 50.0; terminated = True
@@ -137,9 +137,9 @@ class StrategyEnv(gym.Env):
         if terminated or truncated: return self._finalize_step(reward, terminated, truncated)
 
         # 0.2 SOLDIER LOGIC
-        if self.current_turn > 0 and self.current_turn % 100 == 0:
+        if self.current_turn > 0 and self.current_turn % 10 == 0:
             self.board_env.spawn_soldiers(player_id=2, count=1)
-        if self.board_env.move_soldiers(): terminated = True
+        if self.board_env.move_soldiers(soldier_agent, p1_goal): terminated = True
 
         # 0.3 WORKER GROWTH
         if self.current_turn > 0 and self.current_turn % 5 == 0:
@@ -151,6 +151,10 @@ class StrategyEnv(gym.Env):
 
         # 1. Resources
         calc = self.resource_manager.collect_resources(player_id=1)
+        self.lost_gold = calc.get("lost_gold", 0)
+        self.lost_wood = calc.get("lost_wood", 0)
+        self.lost_food = calc.get("lost_food", 0)
+        self.lost_soldiers = calc.get("lost_soldiers", 0)
         
         # 2. Render State Storage
         self.last_dip_str = ["Trade", "Pass", "Attack"][self.diplomacy_action]

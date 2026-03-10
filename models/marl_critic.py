@@ -2,6 +2,33 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class SoldierAgent(nn.Module):
+    """
+    Tactical Level: Controls individual soldier movement.
+    Input: Local 5x5x8 board view + 16-dim goal vector.
+    Action: [Stay, North, South, East, West]
+    """
+    def __init__(self, in_channels=8, goal_dim=16):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, 16, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Flatten()
+        )
+        self.fc = nn.Sequential(
+            nn.Linear(400 + goal_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 5) # [Stay, N, S, E, W]
+        )
+
+    def forward(self, local_view, goal_vector):
+        x = self.conv(local_view)
+        # Ensure goal_vector is matched to batch size
+        if goal_vector.size(0) == 1 and x.size(0) > 1:
+            goal_vector = goal_vector.expand(x.size(0), -1)
+        x = torch.cat([x, goal_vector], dim=1)
+        return self.fc(x)
+
 class DynamicBackbone(nn.Module):
     def __init__(self, in_channels=8, out_features=64):
         super().__init__()
@@ -21,30 +48,34 @@ class DynamicBackbone(nn.Module):
 class EconomicAgent(nn.Module):
     def __init__(self, input_dim):
         super().__init__()
-        self.common = nn.Sequential(
-            nn.Linear(input_dim, 128),
-            nn.ReLU()
-        )
-        self.soldiers_head = nn.Linear(128, 10)
+        self.common = nn.Sequential(nn.Linear(input_dim, 128), nn.ReLU())
+        self.workers_head = nn.Linear(128, 10)
         self.mines_head = nn.Linear(128, 3)
         self.trade_head = nn.Linear(128, 2)
         self.warehouse_head = nn.Linear(128, 3)
         self.crop_head = nn.Linear(128, 3)
-        self.fortify_head = nn.Linear(128, 2) # NEW: 0 or 1
+        self.fortify_head = nn.Linear(128, 2)
         
     def forward(self, x):
         x = self.common(x)
-        return self.soldiers_head(x), self.mines_head(x), self.trade_head(x), \
+        return self.workers_head(x), self.mines_head(x), self.trade_head(x), \
                self.warehouse_head(x), self.crop_head(x), self.fortify_head(x)
 
 class MilitaryAgent(nn.Module):
-    def __init__(self, spatial_channels, context_dim):
+    def __init__(self, spatial_channels, context_dim, goal_dim=16):
         super().__init__()
         self.target_head = nn.Conv2d(spatial_channels, 1, kernel_size=1)
+        self.manager_head = nn.Sequential(
+            nn.Linear(context_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, goal_dim),
+            nn.Tanh()
+        )
 
     def forward(self, spatial_features, common_features):
         target_logits = self.target_head(spatial_features)
-        return target_logits.view(target_logits.size(0), -1)
+        goal_vector = self.manager_head(common_features)
+        return target_logits.view(target_logits.size(0), -1), goal_vector
 
 class MARL_Strategy(nn.Module):
     def __init__(self, in_channels=8, stats_dim=27):
@@ -53,14 +84,17 @@ class MARL_Strategy(nn.Module):
         self.spatial_norm = nn.LayerNorm(64)
         self.stats_norm = nn.LayerNorm(stats_dim)
         self.context_input_dim = 64 + stats_dim
+        
         self.fc_shared = nn.Sequential(
             nn.Linear(self.context_input_dim, 256),
             nn.LayerNorm(256),
             nn.ReLU()
         )
+        
         self.eco_agent = EconomicAgent(256)
         self.mil_agent = MilitaryAgent(64, 256)
         self.dip_head = nn.Linear(256, 3)
+        
         self.global_critic = nn.Sequential(
             nn.Linear(self.context_input_dim, 128),
             nn.ReLU(),
@@ -73,14 +107,14 @@ class MARL_Strategy(nn.Module):
         shared_latent = self.fc_shared(combined_context)
         
         workers_l, mines_l, trade_l, wh_l, crop_l, fort_l = self.eco_agent(shared_latent)
-        mil_target = self.mil_agent(spatial_features, shared_latent)
+        mil_target, goal_vector = self.mil_agent(spatial_features, shared_latent)
         dip_logits = self.dip_head(shared_latent)
         
         if target_mask is not None:
             mil_target = mil_target.masked_fill(~target_mask.bool(), -1e4)
         
         if build_mask is not None:
-            # Mask: [MineL1, MineL2, Trade, WH_L1, WH_L2, CropL1, CropL2, Fortify]
+            # build_mask: [MineL1, MineL2, Trade, WH_L1, WH_L2, CropL1, CropL2, Fortify]
             m_mask = torch.ones_like(mines_l).bool()
             m_mask[:, 1], m_mask[:, 2] = build_mask[:, 0].bool(), build_mask[:, 1].bool()
             mines_l = mines_l.masked_fill(~m_mask, -1e4)
@@ -105,6 +139,7 @@ class MARL_Strategy(nn.Module):
         return {
             "eco": (workers_l, mines_l, trade_l, wh_l, crop_l, fort_l),
             "mil": mil_target,
+            "goal": goal_vector,
             "dip": dip_logits,
             "value": value
         }
