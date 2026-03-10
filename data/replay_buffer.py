@@ -15,7 +15,7 @@ class ReplayBuffer:
         self.next_board_states = np.zeros((capacity, *board_shape), dtype=np.float32)
         
         # Full Stats: 27
-        self.stats_dim = 27
+        self.stats_dim = 28
         self.stats = np.zeros((capacity, self.stats_dim), dtype=np.float32)
         self.next_stats = np.zeros((capacity, self.stats_dim), dtype=np.float32)
 

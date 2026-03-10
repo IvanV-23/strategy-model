@@ -17,7 +17,7 @@ def visualize_marl_agent():
     env = StrategyEnv(render_mode="human")
 
     # 2. Model Initialization
-    model = MARL_Strategy(in_channels=8, stats_dim=27)
+    model = MARL_Strategy(in_channels=8, stats_dim=28)
     soldier_model = SoldierAgent(in_channels=8, goal_dim=16) # Tactical Agent
     
     # 3. Load Weights

@@ -78,7 +78,7 @@ class MilitaryAgent(nn.Module):
         return target_logits.view(target_logits.size(0), -1), goal_vector
 
 class MARL_Strategy(nn.Module):
-    def __init__(self, in_channels=8, stats_dim=27):
+    def __init__(self, in_channels=8, stats_dim=28):
         super().__init__()
         self.backbone = DynamicBackbone(in_channels, out_features=64)
         self.spatial_norm = nn.LayerNorm(64)

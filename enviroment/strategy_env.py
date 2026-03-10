@@ -73,7 +73,7 @@ class StrategyEnv(gym.Env):
             "opponent_resources": spaces.Box(low=0, high=1000, shape=(3,), dtype=np.int32), 
             "turn_number": spaces.Discrete(1000),
             "board_state": spaces.Box(low=0, high=255, shape=(8, 16, 16), dtype=np.int32),
-            "board_stats": spaces.Box(low=0, high=1000, shape=(14,), dtype=np.float32),
+            "board_stats": spaces.Box(low=0, high=1000, shape=(15,), dtype=np.float32),
         })
 
         self.current_turn = 0
@@ -91,7 +91,8 @@ class StrategyEnv(gym.Env):
                 lost_gold=getattr(self, 'lost_gold', 0),
                 lost_wood=getattr(self, 'lost_wood', 0),
                 lost_food=getattr(self, 'lost_food', 0),
-                defeated_workers=getattr(self, 'defeated_workers', 0)
+                defeated_workers=getattr(self, 'defeated_workers', 0),
+                player_soldiers=self.board_env.get_soldier_count(player_id=1)
             )
         }
 
@@ -137,7 +138,7 @@ class StrategyEnv(gym.Env):
         if terminated or truncated: return self._finalize_step(reward, terminated, truncated)
 
         # 0.2 SOLDIER LOGIC
-        if self.current_turn > 0 and self.current_turn % 10 == 0:
+        if self.current_turn > 0 and self.current_turn % 100 == 0:
             self.board_env.spawn_soldiers(player_id=2, count=1)
         if self.board_env.move_soldiers(soldier_agent, p1_goal): terminated = True
 

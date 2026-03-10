@@ -11,14 +11,15 @@ class EconomyEnv:
     def _build_soldiers(self, new_soldiers: int):
         reward = 0
         if new_soldiers > 0:
-            gold_cost = 10 * new_soldiers
-            food_cost = 5 * new_soldiers
+            gold_cost = 500 * new_soldiers
+            wood_cost = 250 * new_soldiers
             
-            if self.player.resources[0] >= gold_cost and self.player.resources[4] >= food_cost:
+            
+            if self.player.resources[0] >= gold_cost and self.player.resources[1] >= wood_cost:
                 self.player.resources[0] -= gold_cost
-                self.player.resources[4] -= food_cost
+                self.player.resources[1] -= wood_cost
                 self.board.spawn_soldiers(player_id=1, count=new_soldiers)
-                reward += 0.1 * new_soldiers
+                reward += 0.01 * new_soldiers
             else:
                 reward -= 0.05
         return reward

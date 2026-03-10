@@ -68,7 +68,7 @@ class StrategyLightningModule(pl.LightningModule):
         self.gamma = 0.99
         self.lam = 0.95
         
-        self.model = MARL_Strategy(in_channels=8, stats_dim=27)
+        self.model = MARL_Strategy(in_channels=8, stats_dim=28)
         self.soldier_agent = soldier_model # Frozen Tactical Agent
         
         self.current_goal = None
@@ -121,8 +121,14 @@ class StrategyLightningModule(pl.LightningModule):
                 self.log("game_stats/worker_capacity", res[:, 7].mean())
                 self.log("game_stats/food_capacity", res[:, 8].mean())
         
-        # In batch mode, board_stats info is in 'mine_stats'
-        stats_raw = obs_batch.get("board_stats") if "board_stats" in obs_batch else obs_batch.get("mine_stats")
+        # In batch mode, board_stats info is in 'full_stats' at indices 12 to 27
+        if "board_stats" in obs_batch:
+            stats_raw = obs_batch["board_stats"]
+        elif "full_stats" in obs_batch:
+            stats_raw = obs_batch["full_stats"][:, 12:27]
+        else:
+            stats_raw = None
+
         if log and stats_raw is not None:
             stats_raw = torch.as_tensor(stats_raw, dtype=torch.float32)
             if stats_raw.dim() > 1:
@@ -139,6 +145,7 @@ class StrategyLightningModule(pl.LightningModule):
                 self.log("game_stats/lost_wood", stats_raw[:, 11].mean())
                 self.log("game_stats/lost_food", stats_raw[:, 12].mean())
                 self.log("game_stats/defeated_workers", stats_raw[:, 13].mean())
+                self.log("game_stats/player_soldiers", stats_raw[:, 14].mean())
             else:
                 self.log("game_stats/mines", stats_raw[1])
                 self.log("game_stats/gold_income", stats_raw[2])
@@ -153,6 +160,7 @@ class StrategyLightningModule(pl.LightningModule):
                 self.log("game_stats/lost_wood", stats_raw[11])
                 self.log("game_stats/lost_food", stats_raw[12])
                 self.log("game_stats/defeated_workers", stats_raw[13])
+                self.log("game_stats/player_soldiers", stats_raw[14])
 
         return boards, stats, t_mask, b_mask
 
