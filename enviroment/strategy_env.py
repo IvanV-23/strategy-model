@@ -130,6 +130,7 @@ class StrategyEnv(gym.Env):
 
     def step(self, action: Dict[str, int], soldier_agent=None, p1_goal=None) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
         reward, terminated, truncated = self._action_extraction(action)
+        self.defeated_workers = 0
 
         # 0.1 Workers redistribution
         if self.board_env.redistribute_workers(owner_id=1, total_workers=self.player_env.resources[2]):
@@ -140,7 +141,10 @@ class StrategyEnv(gym.Env):
         # 0.2 SOLDIER LOGIC
         if self.current_turn > 0 and self.current_turn % 100 == 0:
             self.board_env.spawn_soldiers(player_id=2, count=1)
-        if self.board_env.move_soldiers(soldier_agent, p1_goal): terminated = True
+        
+        terminated_soldiers, sol_defeated_workers = self.board_env.move_soldiers(soldier_agent, p1_goal)
+        if terminated_soldiers: terminated = True
+        self.defeated_workers += sol_defeated_workers
 
         # 0.3 WORKER GROWTH
         if self.current_turn > 0 and self.current_turn % 5 == 0:
@@ -166,6 +170,8 @@ class StrategyEnv(gym.Env):
         if res.get("terminated"): terminated = True
         reward += res["reward"]
         self.history.append(res["history"])
+        self.defeated_workers += res.get("defeated_workers", 0)
+        
         if terminated or truncated: return self._finalize_step(reward, terminated, truncated, calc)
 
         # 4. Economy
@@ -197,7 +203,9 @@ class StrategyEnv(gym.Env):
         if self.render_mode == "human": self.render()
         self.board_env.update_board()
         obs = self._get_obs()
-        if calc: reward += self.reward_env.calculate_player_resources_reward(self.current_turn, obs, calc)
+        if calc:
+            calc["defeated_workers"] = getattr(self, 'defeated_workers', 0)
+            reward += self.reward_env.calculate_player_resources_reward(self.current_turn, obs, calc)
         return obs, float(np.clip(reward, -50.0, 50.0)), terminated, truncated, self._get_info()
 
     def render(self):

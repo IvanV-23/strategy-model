@@ -25,7 +25,8 @@ class RewardEnv:
         food_inc = np.clip(self.player.food_raw_income, 0, 10000)
 
         # --- SCALED DOWN REWARDS ---
-        reward = (self.player._resources[3] * 0.05 + len(trade_routes) * 0.5 + owned_tiles * 0.1)
+        defeated_workers = player_resources_result.get("defeated_workers", 0)
+        reward = (self.player._resources[3] * 0.05 + len(trade_routes) * 0.5 + owned_tiles * 0.1 + defeated_workers * 0.05)
         
         # --- LOGARITHMIC INCOME REWARDS ---
         reward += np.log1p(gold_inc) * 0.5

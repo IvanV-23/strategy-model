@@ -37,6 +37,7 @@ class BoardEnv:
         If soldier_agent and p1_goal are provided, P1 uses the HRL model.
         """
         game_terminated = False
+        defeated_workers = 0
         p1_base, p2_base = (0, 0), (self.rows - 1, self.cols - 1)
         
         # 1. Process P1 Soldiers (Tactical Agent)
@@ -71,6 +72,7 @@ class BoardEnv:
                 defense = self.grid[nr, nc, 2] + (20 if self.grid[nr, nc, 1] > 0 else 0) + (self.grid[nr, nc, 5] * 200) + 100 + (100 if self.grid[nr, nc, 6] == 1 else 0)
                 if attack > defense:
                     if (nr, nc) == p2_base: game_terminated = True
+                    defeated_workers += int(self.grid[nr, nc, 2])
                     self.grid[nr, nc, 0] = 0; self.grid[nr, nc, 1] = 0; self.grid[nr, nc, 2] = 0
                     self.grid[nr, nc, 5] = 0; self.grid[nr, nc, 6] = 0
                     next_p1[nr, nc] += count
@@ -108,7 +110,7 @@ class BoardEnv:
 
         self.grid[:, :, 4] = next_p1
         self.grid[:, :, 5] = next_p2
-        return game_terminated
+        return game_terminated, defeated_workers
 
     def _get_local_view(self, full_obs, r, c, size=5):
         pad = size // 2
