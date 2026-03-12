@@ -60,11 +60,13 @@ class StrategyEnv(gym.Env):
         self.diplomacy_action_space = spaces.Discrete(3)
         self.economy_action_space = spaces.MultiDiscrete([10, 3, 2, 3, 3, 2])
         self.target_action_space = spaces.Discrete(256)
+        self.fortify_target_action_space = spaces.Discrete(256) # NEW
         
         self.action_space = spaces.Dict({
             "diplomacy": self.diplomacy_action_space,
             "economy": self.economy_action_space,
             "target_tile": self.target_action_space,
+            "fortify_tile": self.fortify_target_action_space, # NEW
         })
 
         # Observation space: 8 channels
@@ -80,6 +82,7 @@ class StrategyEnv(gym.Env):
         self.max_turns = 1000
         self.screen = None
         self.clock = None
+        self.pending_fortify_tile = None # NEW
 
     def _get_obs(self) -> Dict[str, np.ndarray]:
         return {
@@ -99,7 +102,8 @@ class StrategyEnv(gym.Env):
     def _get_info(self) -> Dict[str, Any]:
         return {
             "action_mask": self.board_env.get_action_mask(player_id=1),
-            "build_mask": self.board_env.get_build_mask(player_id=1, player_gold=self.player_env.resources[0], player_wood=self.player_env.resources[1])
+            "build_mask": self.board_env.get_build_mask(player_id=1, player_gold=self.player_env.resources[0], player_wood=self.player_env.resources[1], pending_fortify_tile=self.pending_fortify_tile),
+            "fortify_target_mask": self.board_env.get_fortify_target_mask(player_id=1) # NEW
         }
 
     def _action_extraction(self, action: dict):
@@ -116,6 +120,10 @@ class StrategyEnv(gym.Env):
         self.target_row = target_idx // 16
         self.target_col = target_idx % 16
 
+        fort_target_idx = action["fortify_tile"]
+        self.fort_target_row = fort_target_idx // 16
+        self.fort_target_col = fort_target_idx % 16
+
         return 0.0, False, False
 
     def reset(self, seed: int = None, options: Dict = None) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
@@ -124,13 +132,19 @@ class StrategyEnv(gym.Env):
         self.player_env.reset()
         self.opponent_env.reset()
         self.board_env.reset()
+        self.pending_fortify_tile = None # NEW
         self.history = ["Game Started"]
+        self.shot_events = [] # NEW
         if self.render_mode == "human": self.render()
         return self._get_obs(), self._get_info()
 
     def step(self, action: Dict[str, int], soldier_agent=None, p1_goal=None) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
         reward, terminated, truncated = self._action_extraction(action)
         self.defeated_workers = 0
+        self.shot_events = [] # NEW
+
+        # Update pending fortify tile from military selection
+        self.pending_fortify_tile = (self.fort_target_row, self.fort_target_col)
 
         # 0.1 Workers redistribution
         if self.board_env.redistribute_workers(owner_id=1, total_workers=self.player_env.resources[2]):
@@ -141,10 +155,15 @@ class StrategyEnv(gym.Env):
         # 0.2 SOLDIER LOGIC
         if self.current_turn > 0 and self.current_turn % 100 == 0:
             self.board_env.spawn_soldiers(player_id=2, count=1)
+        if self.current_turn == 1: # Spawn initial soldiers for player 1
+            self.board_env.spawn_soldiers(player_id=1, count=2)
         
         terminated_soldiers, sol_defeated_workers = self.board_env.move_soldiers(soldier_agent, p1_goal)
         if terminated_soldiers: terminated = True
         self.defeated_workers += sol_defeated_workers
+
+        # 0.2.1 FORTIFICATION DEFENSE (Level 2 shoots)
+        self.shot_events = self.board_env.process_fortification_defense()
 
         # 0.3 WORKER GROWTH
         if self.current_turn > 0 and self.current_turn % 5 == 0:
@@ -177,10 +196,14 @@ class StrategyEnv(gym.Env):
         # 4. Economy
         eco_res = self.economy_branch.execute_economy_action(
             self.soldiers_to_recruit, self.mines_action, self.trade_action,
-            self.warehouse_action, self.crops_action, self.fortify_action
+            self.warehouse_action, self.crops_action, self.fortify_action,
+            pending_fortify_tile=self.pending_fortify_tile
         )
         reward += eco_res["reward"]
         reward += self.player_env.process_food_consumption()
+        
+        if eco_res.get("fortified"):
+            self.pending_fortify_tile = None # Reset if fortified
 
         # 5. Turn Management
         self.current_turn += 1
@@ -219,7 +242,8 @@ class StrategyEnv(gym.Env):
             'p1_routes': self.board_env.p1_trade_manager.active_routes, 'p1_base': (0,0),
             'o1_routes': [], 'o1_base': (15,15),
             'p_warehouses': self.board_env.p1_buildings_manager.get_building_count_by_type(1, 2) + self.board_env.p1_buildings_manager.get_building_count_by_type(1, 6),
-            'p_crops': self.board_env.p1_buildings_manager.get_building_count_by_type(1, 5) + self.board_env.p1_buildings_manager.get_building_count_by_type(1, 7)
+            'p_crops': self.board_env.p1_buildings_manager.get_building_count_by_type(1, 5) + self.board_env.p1_buildings_manager.get_building_count_by_type(1, 7),
+            'shot_events': self.shot_events # NEW
         }
         return self.renderer.render_frame(self.render_mode, state)
 

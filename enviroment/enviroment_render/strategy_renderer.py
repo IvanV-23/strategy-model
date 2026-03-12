@@ -40,7 +40,9 @@ class StrategyRenderer:
             "base_flag": (255, 255, 0),      
             "food": (150, 255, 100),
             "crop_field": (100, 180, 50),
-            "fortified": (0, 100, 255) # Blue for fortifications
+            "fortified": (0, 100, 255), # Blue for Level 1
+            "fortified_lvl2": (255, 0, 255), # Purple for Level 2
+            "shot": (255, 255, 0) # Yellow for shots
         }
 
     def _init_pygame(self, render_mode):
@@ -94,6 +96,10 @@ class StrategyRenderer:
     def _draw_food_icon(self, x, y):
         pygame.draw.line(self.screen, self.COLORS["food"], (x, y + 8), (x, y - 8), 3)
 
+    def _draw_shot(self, start_pos, end_pos):
+        pygame.draw.line(self.screen, self.COLORS["shot"], start_pos, end_pos, 2)
+        pygame.draw.circle(self.screen, self.COLORS["shot"], end_pos, 4)
+
     def _draw_soldier(self, x, y, count, color=(255, 50, 50)):
         radius = 12
         pygame.draw.circle(self.screen, color, (x, y), radius)
@@ -103,7 +109,7 @@ class StrategyRenderer:
             txt = sf.render(str(int(count)), True, (255, 255, 255))
             self.screen.blit(txt, txt.get_rect(center=(x, y)))
 
-    def draw_board(self, board_data=None, routes=None, bases=None, target_index=None):
+    def draw_board(self, board_data=None, routes=None, bases=None, target_index=None, shot_events=None):
         rows, cols = BOARD_ROWS, BOARD_COLS
         cell_size = CELL_SIZE
         if board_data: rows, cols = len(board_data), len(board_data[0])
@@ -135,8 +141,11 @@ class StrategyRenderer:
                 rect = pygame.Rect(start_x + c * cell_size, start_y + r * cell_size, cell_size, cell_size)
                 
                 # Fortification highlight
-                if tile.get("fortified", 0) > 0:
+                f_lvl = tile.get("fortified", 0)
+                if f_lvl == 1:
                     pygame.draw.rect(self.screen, self.COLORS["fortified"], rect, 3)
+                elif f_lvl == 2:
+                    pygame.draw.rect(self.screen, self.COLORS["fortified_lvl2"], rect, 4)
 
                 status = tile.get("status", 0)
                 if status == 1: self._draw_mine_icon(rect.centerx, rect.centery)
@@ -158,6 +167,14 @@ class StrategyRenderer:
 
                 pygame.draw.rect(self.screen, self.COLORS["grid"], rect, 1)
 
+        if shot_events:
+            for event in shot_events:
+                fr, fc = event["from"]
+                tr, tc = event["to"]
+                start = (start_x + fc * cell_size + 20, start_y + fr * cell_size + 20)
+                end = (start_x + tc * cell_size + 20, start_y + tr * cell_size + 20)
+                self._draw_shot(start, end)
+
     def render_frame(self, render_mode, state_data):
         self._init_pygame(render_mode)
         if render_mode == "human":
@@ -166,7 +183,10 @@ class StrategyRenderer:
 
         self.screen.fill(self.COLORS["bg"])
         p_res, o_res = state_data['p_res'], state_data['o_res']
-        self.draw_board(board_data=state_data.get('board'), routes=(state_data.get('p1_routes'), []), bases=((0,0), (15,15)))
+        self.draw_board(board_data=state_data.get('board'), 
+                        routes=(state_data.get('p1_routes'), []), 
+                        bases=((0,0), (15,15)),
+                        shot_events=state_data.get('shot_events'))
         
         if render_mode == "human":
             pygame.display.flip()

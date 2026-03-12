@@ -136,7 +136,7 @@ class EconomyEnv:
             
         return reward
 
-    def _fortify_action(self, fortify_action: int):
+    def _fortify_action(self, fortify_action: int, pending_fortify_tile=None):
         """
         fortify_action: 1 to fortify, 0 to skip
         """
@@ -144,17 +144,17 @@ class EconomyEnv:
         if fortify_action == 1:
             gold_cost, wood_cost = 50, 50
             if self.player.resources[0] >= gold_cost and self.player.resources[1] >= wood_cost:
-                success, msg = self.board.fortify_tile(player_id=1)
+                success, msg = self.board.fortify_tile(player_id=1, target_coords=pending_fortify_tile)
                 if success:
                     self.player.resources[0] -= gold_cost
                     self.player.resources[1] -= wood_cost
                     print(f"Successfully fortified tile. {msg}")
-                    reward += 0.5
+                    return 0.5, True
                 else:
                     reward -= 0.05
             else:
                 reward -= 0.1
-        return reward
+        return reward, False
     
     def execute_economy_action(self,
                                 new_soldiers: int, 
@@ -162,7 +162,8 @@ class EconomyEnv:
                                 trade_route_action: int,
                                 warehouse_action: int,
                                 crop_field_action: int = 0,
-                                fortify_action: int = 0 # NEW
+                                fortify_action: int = 0,
+                                pending_fortify_tile = None
                                 ):
 
         reward = self._build_soldiers(new_soldiers)
@@ -170,6 +171,8 @@ class EconomyEnv:
         reward += self._build_trade_routes(trade_route_action)
         reward += self._build_warehouse(warehouse_action)
         reward += self._build_crop_field(crop_field_action)
-        reward += self._fortify_action(fortify_action)
+        
+        f_reward, fortified = self._fortify_action(fortify_action, pending_fortify_tile)
+        reward += f_reward
 
-        return {"reward": reward}
+        return {"reward": reward, "fortified": fortified}

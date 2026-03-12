@@ -136,15 +136,38 @@ class BoardEnv:
             self.grid[r, c, 2] = min(self.grid[r, c, 2], BASE_LIMIT if (r, c) == p2_base else WORKER_LIMIT)
         return np.log1p(total_p1) * 0.1
 
-    def fortify_tile(self, player_id):
-        owned = np.argwhere((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 6] == 0))
+    def fortify_tile(self, player_id, target_coords=None):
+        if target_coords is not None:
+            r, c = target_coords
+            if 0 <= r < self.rows and 0 <= c < self.cols:
+                if self.grid[r, c, 0] == player_id and self.grid[r, c, 6] < 2:
+                    self.grid[r, c, 6] += 1
+                    return True, f"at_{r}_{c}_lvl_{self.grid[r,c,6]}"
+            return False, "invalid_target"
+
+        owned = np.argwhere((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 6] < 2))
         if not len(owned): return False, "none"
         base = np.array([0, 0] if player_id == 1 else [self.rows-1, self.cols-1])
         dists = [abs(r-base[0]) + abs(c-base[1]) for r, c in owned]
         candidates = [owned[i] for i, d in enumerate(dists) if d == min(dists)]
         r, c = candidates[np.random.randint(len(candidates))]
-        self.grid[r, c, 6] = 1
-        return True, f"at_{r}_{c}"
+        self.grid[r, c, 6] += 1
+        return True, f"at_{r}_{c}_lvl_{self.grid[r,c,6]}"
+
+    def process_fortification_defense(self):
+        """
+        Level 2 fortifications shoot adjacent enemy soldiers.
+        """
+        shot_events = []
+        # Find all Level 2 fortifications
+        for r, c in np.argwhere(self.grid[:, :, 6] == 2):
+            owner = self.grid[r, c, 0]
+            enemy_channel = 5 if owner == 1 else 4
+            for nr, nc in self._get_neighbors(r, c):
+                if self.grid[nr, nc, enemy_channel] > 0:
+                    self.grid[nr, nc, enemy_channel] -= 1
+                    shot_events.append({"from": (r, c), "to": (nr, nc)})
+        return shot_events
 
     def get_tile_data(self):
         return [[{"owner": int(self.grid[r,c,0]), "status": int(self.grid[r,c,1]), "workers": float(self.grid[r,c,2]), "wood": int(self.grid[r,c,3]), "soldiers": int(self.grid[r,c,4]), "p2_soldiers": int(self.grid[r,c,5]), "fortified": int(self.grid[r,c,6])} for c in range(self.cols)] for r in range(self.rows)]
@@ -246,7 +269,14 @@ class BoardEnv:
                 if self.grid[nr, nc, 0] == 0: mask[nr * self.cols + nc] = True
         return mask
 
-    def get_build_mask(self, player_id, player_gold, player_wood):
+    def get_fortify_target_mask(self, player_id):
+        mask = np.zeros(self.rows * self.cols, dtype=bool)
+        # Any owned tile that is Level 0 or Level 1 is a valid target to select/upgrade
+        for r, c in np.argwhere((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 6] < 2)):
+            mask[r * self.cols + c] = True
+        return mask
+
+    def get_build_mask(self, player_id, player_gold, player_wood, pending_fortify_tile=None):
         mask = np.zeros(8, dtype=bool)
         m_cnt = self.p1_buildings_manager.get_mine_count(player_id)
         res = self.p1_buildings_manager.get_resource_tile_count(player_id)
@@ -264,7 +294,17 @@ class BoardEnv:
         has_wb = any(any(self.grid[nr, nc, 1] in [2, 3, 6] for nr, nc in self._get_neighbors(r, c)) for r, c in sites)
         if player_gold >= 20 and player_wood >= 10 and has_wb: mask[5] = True 
         if np.any((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] == 5)) and player_gold >= 40 and player_wood >= 20: mask[6] = True 
-        if player_gold >= 50 and player_wood >= 50 and np.any((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 6] == 0)): mask[7] = True
+        
+        # Fortify: only if we have a pending target and it's still valid
+        if player_gold >= 50 and player_wood >= 50:
+            if pending_fortify_tile is not None:
+                r, c = pending_fortify_tile
+                if self.grid[r, c, 0] == player_id and self.grid[r, c, 6] < 2:
+                    mask[7] = True
+            else:
+                # Fallback if no pending (though the agent should pick one)
+                if np.any((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 6] < 2)):
+                    mask[7] = True
         return mask
 
     def collect_wood_income(self, player_id): return int(np.sum(self.grid[self.grid[:, :, 0] == player_id, 3]))

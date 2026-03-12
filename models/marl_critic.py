@@ -65,17 +65,19 @@ class MilitaryAgent(nn.Module):
     def __init__(self, spatial_channels, context_dim, goal_dim=16):
         super().__init__()
         self.target_head = nn.Conv2d(spatial_channels, 1, kernel_size=1)
+        self.fortify_target_head = nn.Conv2d(spatial_channels, 1, kernel_size=1)
         self.manager_head = nn.Sequential(
             nn.Linear(context_dim, 64),
             nn.ReLU(),
             nn.Linear(64, goal_dim),
-            nn.Tanh()
+            nn.LayerNorm(goal_dim)
         )
 
     def forward(self, spatial_features, common_features):
         target_logits = self.target_head(spatial_features)
+        fortify_logits = self.fortify_target_head(spatial_features)
         goal_vector = self.manager_head(common_features)
-        return target_logits.view(target_logits.size(0), -1), goal_vector
+        return target_logits.view(target_logits.size(0), -1), fortify_logits.view(fortify_logits.size(0), -1), goal_vector
 
 class MARL_Strategy(nn.Module):
     def __init__(self, in_channels=8, stats_dim=28):
@@ -101,18 +103,21 @@ class MARL_Strategy(nn.Module):
             nn.Linear(128, 1)
         )
 
-    def forward(self, board_state, global_stats, target_mask=None, build_mask=None):
+    def forward(self, board_state, global_stats, target_mask=None, build_mask=None, fortify_target_mask=None):
         spatial_features, pooled_features = self.backbone(board_state)
         combined_context = torch.cat([self.spatial_norm(pooled_features), self.stats_norm(global_stats)], dim=1)
         shared_latent = self.fc_shared(combined_context)
         
         workers_l, mines_l, trade_l, wh_l, crop_l, fort_l = self.eco_agent(shared_latent)
-        mil_target, goal_vector = self.mil_agent(spatial_features, shared_latent)
+        mil_target, mil_fortify, goal_vector = self.mil_agent(spatial_features, shared_latent)
         dip_logits = self.dip_head(shared_latent)
         
         if target_mask is not None:
             mil_target = mil_target.masked_fill(~target_mask.bool(), -1e4)
         
+        if fortify_target_mask is not None:
+            mil_fortify = mil_fortify.masked_fill(~fortify_target_mask.bool(), -1e4)
+
         if build_mask is not None:
             # build_mask: [MineL1, MineL2, Trade, WH_L1, WH_L2, CropL1, CropL2, Fortify]
             m_mask = torch.ones_like(mines_l).bool()
@@ -139,6 +144,7 @@ class MARL_Strategy(nn.Module):
         return {
             "eco": (workers_l, mines_l, trade_l, wh_l, crop_l, fort_l),
             "mil": mil_target,
+            "mil_fortify": mil_fortify,
             "goal": goal_vector,
             "dip": dip_logits,
             "value": value

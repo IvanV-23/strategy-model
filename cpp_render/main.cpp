@@ -87,6 +87,7 @@ public:
             draw_board_backgrounds(state, start_x, start_y, rows, cols, cell_size);
             draw_routes(state, start_x, start_y, cell_size);
             draw_board_content(state, start_x, start_y, rows, cols, cell_size);
+            draw_shots(state, start_x, start_y, cell_size);
         }
 
         SDL_RenderPresent(renderer);
@@ -139,12 +140,21 @@ private:
                 SDL_Rect rect = {start_x + c * cell_size, start_y + r * cell_size, cell_size, cell_size};
                 const auto& tile = board[r][c];
 
-                // --- Fortification Highlight (Blue Border) ---
-                if (tile.contains("fortified") && tile["fortified"].get<int>() > 0) {
-                    SDL_SetRenderDrawColor(renderer, 0, 100, 255, 255);
-                    for(int i=0; i<3; ++i) { // 3px border
-                        SDL_Rect border = {rect.x+i, rect.y+i, rect.w-2*i, rect.h-2*i};
-                        SDL_RenderDrawRect(renderer, &border);
+                // --- Fortification Highlight ---
+                if (tile.contains("fortified")) {
+                    int f_lvl = tile["fortified"].get<int>();
+                    if (f_lvl == 1) {
+                        SDL_SetRenderDrawColor(renderer, 0, 100, 255, 255); // Blue
+                        for(int i=0; i<3; ++i) {
+                            SDL_Rect border = {rect.x+i, rect.y+i, rect.w-2*i, rect.h-2*i};
+                            SDL_RenderDrawRect(renderer, &border);
+                        }
+                    } else if (f_lvl == 2) {
+                        SDL_SetRenderDrawColor(renderer, 255, 0, 255, 255); // Purple
+                        for(int i=0; i<4; ++i) {
+                            SDL_Rect border = {rect.x+i, rect.y+i, rect.w-2*i, rect.h-2*i};
+                            SDL_RenderDrawRect(renderer, &border);
+                        }
                     }
                 }
 
@@ -214,6 +224,24 @@ private:
 
         if (state.contains("turn")) {
             draw_text("Turn: " + std::to_string(state["turn"].get<int>()), width / 2 - 40, 20, {255, 255, 255, 255});
+        }
+    }
+
+    void draw_shots(const json& state, int start_x, int start_y, int cell_size) {
+        if (state.contains("shot_events")) {
+            SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255); // Yellow
+            for (auto& event : state["shot_events"]) {
+                auto from = event["from"];
+                auto to = event["to"];
+                int fx = start_x + from[1].get<int>() * cell_size + cell_size / 2;
+                int fy = start_y + from[0].get<int>() * cell_size + cell_size / 2;
+                int tx = start_x + to[1].get<int>() * cell_size + cell_size / 2;
+                int ty = start_y + to[0].get<int>() * cell_size + cell_size / 2;
+                
+                SDL_RenderDrawLine(renderer, fx, fy, tx, ty);
+                draw_circle(tx, ty, 4);
+                fill_circle(tx, ty, 2);
+            }
         }
     }
     

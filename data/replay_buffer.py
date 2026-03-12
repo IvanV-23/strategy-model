@@ -22,11 +22,13 @@ class ReplayBuffer:
         self.actions_diplomacy = np.zeros((capacity,), dtype=np.int64)
         self.actions_economy = np.zeros((capacity, 6), dtype=np.int64) 
         self.actions_target = np.zeros((capacity,), dtype=np.int64)
+        self.actions_fortify = np.zeros((capacity,), dtype=np.int64) # NEW
         
         # Masking dimensions from action space and build mask
         target_dim = action_space["target_tile"].n
         self.masks_target = np.ones((capacity, target_dim), dtype=np.bool_)
         self.masks_build = np.ones((capacity, 8), dtype=np.bool_)
+        self.masks_fortify = np.ones((capacity, target_dim), dtype=np.bool_) # NEW
 
         self.rewards = np.zeros((capacity,), dtype=np.float32)
         self.terminated = np.zeros((capacity,), dtype=np.bool_)
@@ -56,13 +58,15 @@ class ReplayBuffer:
         self.actions_diplomacy[self.idx] = action["diplomacy"]
         self.actions_economy[self.idx] = action["economy"] 
         self.actions_target[self.idx] = action["target_tile"]
+        self.actions_fortify[self.idx] = action.get("fortify_tile", 0) # NEW
         
-        # Store both masks from the info dict
+        # Store masks from the info dict
         if info:
             target_dim = self.masks_target.shape[1]
             build_dim = self.masks_build.shape[1]
             self.masks_target[self.idx] = info.get("action_mask", np.ones(target_dim)).flatten()
             self.masks_build[self.idx] = info.get("build_mask", np.ones(build_dim)).flatten()
+            self.masks_fortify[self.idx] = info.get("fortify_target_mask", np.ones(target_dim)).flatten() # NEW
 
         self.rewards[self.idx] = reward
         self.terminated[self.idx] = terminated
@@ -89,12 +93,14 @@ class ReplayBuffer:
                 torch.from_numpy(self.actions_diplomacy[idxs]),
                 torch.from_numpy(self.actions_economy[idxs]),
                 torch.from_numpy(self.actions_target[idxs]),
+                torch.from_numpy(self.actions_fortify[idxs]), # NEW
                 torch.from_numpy(self.rewards[idxs]),
                 get_dict(self.next_stats, self.next_board_states),
                 torch.from_numpy(self.terminated[idxs]),
                 torch.from_numpy(self.truncated[idxs]),
                 torch.from_numpy(self.masks_target[idxs]),
                 torch.from_numpy(self.masks_build[idxs]),
+                torch.from_numpy(self.masks_fortify[idxs]), # NEW
                 torch.from_numpy(self.advantages[idxs]),
                 torch.from_numpy(self.returns[idxs])
             )

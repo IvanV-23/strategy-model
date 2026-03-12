@@ -88,15 +88,16 @@ class StrategyLightningModule(pl.LightningModule):
             boards = obs_batch["board_state"].to(device, dtype=torch.float32) / 255.0
             stats = obs_batch["full_stats"].to(device, dtype=torch.float32) / 1000.0
 
-        t_mask, b_mask = None, None
+        t_mask, b_mask, f_mask = None, None, None
         if info_batch is not None:
             if isinstance(info_batch, dict):
                 t_mask = torch.from_numpy(info_batch.get("action_mask")).to(device, dtype=torch.bool).view(1, -1)
                 b_mask = torch.from_numpy(info_batch.get("build_mask")).to(device, dtype=torch.bool).view(1, -1)
+                f_mask = torch.from_numpy(info_batch.get("fortify_target_mask")).to(device, dtype=torch.bool).view(1, -1)
             else:
-                t_mask, b_mask = info_batch[0].to(device, dtype=torch.bool), info_batch[1].to(device, dtype=torch.bool)
+                t_mask, b_mask, f_mask = info_batch[0].to(device, dtype=torch.bool), info_batch[1].to(device, dtype=torch.bool), info_batch[2].to(device, dtype=torch.bool)
         else:
-            t_mask, b_mask = torch.ones((1, 256), device=device, dtype=torch.bool), torch.ones((1, 8), device=device, dtype=torch.bool)
+            t_mask, b_mask, f_mask = torch.ones((1, 256), device=device, dtype=torch.bool), torch.ones((1, 8), device=device, dtype=torch.bool), torch.ones((1, 256), device=device, dtype=torch.bool)
         
         if log and "player_resources" in obs_batch:
             res = torch.as_tensor(obs_batch["player_resources"], dtype=torch.float32)
@@ -162,15 +163,15 @@ class StrategyLightningModule(pl.LightningModule):
                 self.log("game_stats/defeated_workers", stats_raw[13])
                 self.log("game_stats/player_soldiers", stats_raw[14])
 
-        return boards, stats, t_mask, b_mask
+        return boards, stats, t_mask, b_mask, f_mask
 
     def on_train_epoch_start(self):
         trajectory_data = []
         start_idx = self.buffer.idx
         for _ in range(self.collect_steps):
-            board_t, stats_t, t_mask, b_mask = self._process_obs(self.obs, self.info)
+            board_t, stats_t, t_mask, b_mask, f_mask = self._process_obs(self.obs, self.info)
             with torch.no_grad():
-                res = self.model(board_t, stats_t, target_mask=t_mask, build_mask=b_mask)
+                res = self.model(board_t, stats_t, target_mask=t_mask, build_mask=b_mask, fortify_target_mask=f_mask)
             
             if self.env.current_turn % self.goal_persistence == 0:
                 self.current_goal = res["goal"]
@@ -178,7 +179,8 @@ class StrategyLightningModule(pl.LightningModule):
             action = {
                 "diplomacy": torch.distributions.Categorical(logits=res["dip"]).sample().item(),
                 "economy": [torch.distributions.Categorical(logits=l).sample().item() for l in res["eco"]],
-                "target_tile": torch.distributions.Categorical(logits=res["mil"]).sample().item()
+                "target_tile": torch.distributions.Categorical(logits=res["mil"]).sample().item(),
+                "fortify_tile": torch.distributions.Categorical(logits=res["mil_fortify"]).sample().item()
             }
 
             next_obs, reward, terminated, truncated, next_info = self.env.step(action, self.soldier_agent, self.current_goal)
@@ -200,8 +202,8 @@ class StrategyLightningModule(pl.LightningModule):
         dones = np.array([e['done'] for e in trajectory])
         
         with torch.no_grad():
-            b, s, tm, bm = self._process_obs(last_obs, last_info, log=False)
-            res = self.model(b, s, tm, bm)
+            b, s, tm, bm, fm = self._process_obs(last_obs, last_info, log=False)
+            res = self.model(b, s, tm, bm, fm)
             next_value = res["value"].item()
 
         advantages = np.zeros_like(rewards)
@@ -220,14 +222,15 @@ class StrategyLightningModule(pl.LightningModule):
         if self.buffer.size >= self.batch_size: return
         print(f"Pre-filling buffer...")
         while self.buffer.size < self.batch_size:
-            board_t, stats_t, t_mask, b_mask = self._process_obs(self.obs, self.info, log=False)
+            board_t, stats_t, t_mask, b_mask, f_mask = self._process_obs(self.obs, self.info, log=False)
             with torch.no_grad():
-                res = self.model(board_t, stats_t, target_mask=t_mask, build_mask=b_mask)
+                res = self.model(board_t, stats_t, target_mask=t_mask, build_mask=b_mask, fortify_target_mask=f_mask)
             eco_l = res["eco"]
             action = {
                 "diplomacy": torch.distributions.Categorical(logits=res["dip"]).sample().item(),
                 "economy": [torch.distributions.Categorical(logits=l).sample().item() for l in eco_l],
-                "target_tile": torch.distributions.Categorical(logits=res["mil"]).sample().item()
+                "target_tile": torch.distributions.Categorical(logits=res["mil"]).sample().item(),
+                "fortify_tile": torch.distributions.Categorical(logits=res["mil_fortify"]).sample().item()
             }
             next_obs, reward, terminated, truncated, next_info = self.env.step(action, self.soldier_agent, res["goal"])
             self.buffer.add(self.obs, action, reward, next_obs, terminated, truncated, self.info)
@@ -237,17 +240,17 @@ class StrategyLightningModule(pl.LightningModule):
     def on_fit_start(self): self._prefill_buffer()
 
     def training_step(self, batch, batch_idx):
-        (states, a_dip, a_eco, a_target, rewards, _, t_d, t_c, m_target, m_build, pre_adv, pre_returns) = batch
-        boards, stats, t_mask, b_mask = self._process_obs(states, (m_target, m_build))
-        res = self.model(boards, stats, target_mask=t_mask, build_mask=b_mask)
+        (states, a_dip, a_eco, a_target, a_fort, rewards, _, t_d, t_c, m_target, m_build, m_fort_mask, pre_adv, pre_returns) = batch
+        boards, stats, t_mask, b_mask, f_mask = self._process_obs(states, (m_target, m_build, m_fort_mask))
+        res = self.model(boards, stats, target_mask=t_mask, build_mask=b_mask, fortify_target_mask=f_mask)
         
         def stab(l): return torch.clamp(torch.nan_to_num(l, nan=0.0, posinf=20.0, neginf=-20.0), -20, 20)
-        res["dip"], res["mil"] = stab(res["dip"]), stab(res["mil"])
+        res["dip"], res["mil"], res["mil_fortify"] = stab(res["dip"]), stab(res["mil"]), stab(res["mil_fortify"])
         res["eco"] = [stab(l) for l in res["eco"]]
         
         adv = (pre_adv - pre_adv.mean()) / (pre_adv.std() + 1e-8)
-        d_dip, d_tar = torch.distributions.Categorical(logits=res["dip"]), torch.distributions.Categorical(logits=res["mil"])
-        lp = d_dip.log_prob(a_dip) + d_tar.log_prob(a_target)
+        d_dip, d_tar, d_fort = torch.distributions.Categorical(logits=res["dip"]), torch.distributions.Categorical(logits=res["mil"]), torch.distributions.Categorical(logits=res["mil_fortify"])
+        lp = d_dip.log_prob(a_dip) + d_tar.log_prob(a_target) + d_fort.log_prob(a_fort)
         for i, l in enumerate(res["eco"]): lp += torch.distributions.Categorical(logits=l).log_prob(a_eco[:, i])
 
         actor_loss = -(lp * adv).mean()

@@ -54,8 +54,9 @@ def visualize_marl_agent():
             b_mask = info.get("build_mask", np.ones(8))
             b_mask_t = torch.from_numpy(b_mask).to(torch.bool).unsqueeze(0)
             t_mask_t = torch.from_numpy(info.get("action_mask", np.ones(256))).to(torch.bool).unsqueeze(0)
+            f_mask_t = torch.from_numpy(info.get("fortify_target_mask", np.ones(256))).to(torch.bool).unsqueeze(0)
 
-            res = model(board_t, stats_t, target_mask=t_mask_t, build_mask=b_mask_t)
+            res = model(board_t, stats_t, target_mask=t_mask_t, build_mask=b_mask_t, fortify_target_mask=f_mask_t)
             
             # HRL: Update goal every 10 turns
             if env.current_turn % 10 == 0:
@@ -65,7 +66,8 @@ def visualize_marl_agent():
             action = {
                 "diplomacy": torch.argmax(res["dip"], dim=1).item(),
                 "economy": [torch.argmax(l, dim=1).item() for l in eco_l],
-                "target_tile": torch.argmax(res["mil"], dim=1).item()
+                "target_tile": torch.argmax(res["mil"], dim=1).item(),
+                "fortify_tile": torch.argmax(res["mil_fortify"], dim=1).item()
             }
 
         # 8. Step environment with HRL parameters
