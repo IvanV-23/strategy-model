@@ -100,11 +100,14 @@ class StrategyEnv(gym.Env):
         }
 
     def _get_info(self) -> Dict[str, Any]:
-        return {
+        info = {
             "action_mask": self.board_env.get_action_mask(player_id=1),
             "build_mask": self.board_env.get_build_mask(player_id=1, player_gold=self.player_env.resources[0], player_wood=self.player_env.resources[1], pending_fortify_tile=self.pending_fortify_tile),
             "fortify_target_mask": self.board_env.get_fortify_target_mask(player_id=1) # NEW
         }
+        if hasattr(self, 'last_accuracy_info'):
+            info["soldier_accuracy"] = self.last_accuracy_info
+        return info
 
     def _action_extraction(self, action: dict):
         self.diplomacy_action = action["diplomacy"]
@@ -158,12 +161,19 @@ class StrategyEnv(gym.Env):
         if self.current_turn == 1: # Spawn initial soldiers for player 1
             self.board_env.spawn_soldiers(player_id=1, count=2)
         
-        terminated_soldiers, sol_defeated_workers = self.board_env.move_soldiers(soldier_agent, p1_goal)
+        terminated_soldiers, sol_defeated_workers, accuracy_info, damage_dealt = self.board_env.move_soldiers(soldier_agent, p1_goal, target_tile=(self.target_row, self.target_col))
         if terminated_soldiers: terminated = True
         self.defeated_workers += sol_defeated_workers
+        self.damage_dealt_to_opponent = damage_dealt
+        self.last_accuracy_info = accuracy_info
+        
+        # Track combat losses
+        self.lost_soldiers_combat = self.board_env.lost_soldiers_combat
 
         # 0.2.1 FORTIFICATION DEFENSE (Level 2 shoots)
         self.shot_events = self.board_env.process_fortification_defense()
+        # Add defense losses if any
+        self.lost_soldiers_combat += self.board_env.lost_soldiers_combat
 
         # 0.3 WORKER GROWTH
         if self.current_turn > 0 and self.current_turn % 5 == 0:
@@ -228,6 +238,9 @@ class StrategyEnv(gym.Env):
         obs = self._get_obs()
         if calc:
             calc["defeated_workers"] = getattr(self, 'defeated_workers', 0)
+            calc["damage_dealt_to_opponent"] = getattr(self, 'damage_dealt_to_opponent', 0.0)
+            # Combine bankruptcy losses (already in calc) with combat losses
+            calc["lost_soldiers"] = calc.get("lost_soldiers", 0) + getattr(self, 'lost_soldiers_combat', 0)
             reward += self.reward_env.calculate_player_resources_reward(self.current_turn, obs, calc)
         return obs, float(np.clip(reward, -50.0, 50.0)), terminated, truncated, self._get_info()
 

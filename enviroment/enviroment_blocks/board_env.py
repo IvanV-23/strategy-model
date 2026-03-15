@@ -31,13 +31,18 @@ class BoardEnv:
         channel = 4 if player_id == 1 else 5
         self.grid[base_coords[0], base_coords[1], channel] += count
 
-    def move_soldiers(self, soldier_agent=None, p1_goal=None):
+    def move_soldiers(self, soldier_agent=None, p1_goal=None, target_tile=None):
         """
         Moves soldiers. 
         If soldier_agent and p1_goal are provided, P1 uses the HRL model.
+        target_tile: (row, col) coordinates of the strategic target.
         """
         game_terminated = False
         defeated_workers = 0
+        damage_dealt = 0.0
+        self.lost_soldiers_combat = 0
+        moved_closer = 0
+        total_moves = 0
         p1_base, p2_base = (0, 0), (self.rows - 1, self.cols - 1)
         
         # 1. Process P1 Soldiers (Tactical Agent)
@@ -51,15 +56,31 @@ class BoardEnv:
             nr, nc = r, c
             
             if soldier_agent is not None and p1_goal is not None:
+                total_moves += 1
+                # Hybrid Goal: Inject relative spatial intent into the first 2 slots
+                current_p1_goal = p1_goal.clone()
+                if target_tile is not None:
+                    tr, tc = target_tile
+                    # Relative Transformation: (target_xy - soldier_xy) / board_size
+                    current_p1_goal[0, 0] = float(tr - r) / 20.0
+                    current_p1_goal[0, 1] = float(tc - c) / 20.0
+
                 local_view = self._get_local_view(full_obs, r, c, size=5)
                 local_t = torch.from_numpy(local_view).float().unsqueeze(0).to(p1_goal.device)
                 with torch.no_grad():
-                    logits = soldier_agent(local_t, p1_goal)
+                    logits = soldier_agent(local_t, current_p1_goal)
                     action = torch.argmax(logits, dim=1).item()
                 moves = [(0,0), (-1,0), (1,0), (0,1), (0,-1)]
                 dr, dc = moves[action]
                 if 0 <= r+dr < self.rows and 0 <= c+dc < self.cols:
                     nr, nc = r+dr, c+dc
+                
+                if target_tile is not None:
+                    tr, tc = target_tile
+                    old_dist = abs(tr - r) + abs(tc - c)
+                    new_dist = abs(tr - nr) + abs(tc - nc)
+                    if new_dist < old_dist:
+                        moved_closer += 1
             else:
                 neighbors = self._get_neighbors(r, c)
                 if neighbors:
@@ -73,6 +94,11 @@ class BoardEnv:
                 if attack > defense:
                     if (nr, nc) == p2_base: game_terminated = True
                     defeated_workers += int(self.grid[nr, nc, 2])
+                    # Damage Dealt: Soldiers (200 each) + Buildings (Status > 0) + Fortifications (Status 6)
+                    damage_dealt += (self.grid[nr, nc, 5] * 200.0)
+                    if self.grid[nr, nc, 1] > 0: damage_dealt += 100.0
+                    if self.grid[nr, nc, 6] > 0: damage_dealt += 100.0 * self.grid[nr, nc, 6]
+
                     self.grid[nr, nc, 0] = 0; self.grid[nr, nc, 1] = 0; self.grid[nr, nc, 2] = 0
                     self.grid[nr, nc, 5] = 0; self.grid[nr, nc, 6] = 0
                     next_p1[nr, nc] += count
@@ -80,6 +106,7 @@ class BoardEnv:
                 p2_count = self.grid[nr, nc, 5]
                 if p2_count > 0:
                     if count * 200 > p2_count * 200:
+                        damage_dealt += (p2_count * 200.0)
                         self.grid[nr, nc, 5] = 0; next_p1[nr, nc] += count
                 else:
                     next_p1[nr, nc] += count
@@ -97,6 +124,7 @@ class BoardEnv:
                 defense = self.grid[nr, nc, 2] + (20 if self.grid[nr, nc, 1] > 0 else 0) + (next_p1[nr, nc] * 200) + 100 + (100 if self.grid[nr, nc, 6] == 1 else 0)
                 if attack > defense:
                     if (nr, nc) == p1_base: game_terminated = True
+                    self.lost_soldiers_combat += int(next_p1[nr, nc])
                     self.grid[nr, nc, 0] = 0; self.grid[nr, nc, 1] = 0; self.grid[nr, nc, 2] = 0
                     self.grid[nr, nc, 6] = 0; next_p1[nr, nc] = 0
                     next_p2[nr, nc] += count
@@ -104,13 +132,14 @@ class BoardEnv:
                 p1_count = next_p1[nr, nc]
                 if p1_count > 0:
                     if count * 200 > p1_count * 200:
+                        self.lost_soldiers_combat += int(next_p1[nr, nc])
                         next_p1[nr, nc] = 0; next_p2[nr, nc] += count
-                else:
-                    next_p2[nr, nc] += count
+                    else:
+                        next_p2[nr, nc] += count
 
         self.grid[:, :, 4] = next_p1
         self.grid[:, :, 5] = next_p2
-        return game_terminated, defeated_workers
+        return game_terminated, defeated_workers, (moved_closer, total_moves), damage_dealt
 
     def _get_local_view(self, full_obs, r, c, size=5):
         pad = size // 2
@@ -167,6 +196,9 @@ class BoardEnv:
                 if self.grid[nr, nc, enemy_channel] > 0:
                     self.grid[nr, nc, enemy_channel] -= 1
                     shot_events.append({"from": (r, c), "to": (nr, nc)})
+                    if enemy_channel == 4: # P1 lost a soldier
+                         if hasattr(self, 'lost_soldiers_combat'):
+                             self.lost_soldiers_combat += 1
         return shot_events
 
     def get_tile_data(self):
@@ -266,7 +298,8 @@ class BoardEnv:
         mask = np.zeros(self.rows * self.cols, dtype=bool)
         for r, c in np.argwhere(self.grid[:, :, 0] == player_id):
             for nr, nc in self._get_neighbors(r, c):
-                if self.grid[nr, nc, 0] == 0: mask[nr * self.cols + nc] = True
+                # Allow selecting empty tiles (owner 0) OR enemy tiles (owner 2)
+                if self.grid[nr, nc, 0] in [0, 2]: mask[nr * self.cols + nc] = True
         return mask
 
     def get_fortify_target_mask(self, player_id):

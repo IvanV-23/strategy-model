@@ -41,8 +41,26 @@ class SoldierSandbox:
             local_view = torch.randn(32, 8, 5, 5)
             goal = torch.randn(32, 16)
             
-            # Target action: simply move towards "highest goal value" (Dummy heuristic for pre-training)
-            target = torch.randint(0, 5, (32,))
+            # Slot 2: Aggression Mode (randomly on/off)
+            goal[:, 2] = (torch.rand(32) > 0.5).float()
+
+            # Hybrid Goal: First 2 slots are relative (dr, dc)
+            # dr > 0 means target is South, dr < 0 means target is North
+            # dc > 0 means target is East, dc < 0 means target is West
+            target = []
+            for b in range(32):
+                dr, dc = goal[b, 0].item(), goal[b, 1].item()
+                # If Aggression is on, maybe move faster? 
+                # For now, just follow the same logic but the model sees the bit.
+                if abs(dr) > abs(dc):
+                    action = 2 if dr > 0 else 1 # South if dr > 0, else North
+                elif abs(dc) > 0:
+                    action = 3 if dc > 0 else 4 # East if dc > 0, else West
+                else:
+                    action = 0 # Stay
+                target.append(action)
+            
+            target = torch.tensor(target, dtype=torch.long)
             
             logits = self.model(local_view, goal)
             loss = F.cross_entropy(logits, target)
@@ -69,7 +87,9 @@ class StrategyLightningModule(pl.LightningModule):
         self.lam = 0.95
         
         self.model = MARL_Strategy(in_channels=8, stats_dim=28)
-        self.soldier_agent = soldier_model # Frozen Tactical Agent
+        self.soldier_agent = soldier_model # Initially unfreezing for warm-up
+        for p in self.soldier_agent.parameters(): 
+            p.requires_grad = True
         
         self.current_goal = None
         self.goal_persistence = 10 # Change goal every 10 turns
@@ -173,9 +193,6 @@ class StrategyLightningModule(pl.LightningModule):
             with torch.no_grad():
                 res = self.model(board_t, stats_t, target_mask=t_mask, build_mask=b_mask, fortify_target_mask=f_mask)
             
-            if self.env.current_turn % self.goal_persistence == 0:
-                self.current_goal = res["goal"]
-
             action = {
                 "diplomacy": torch.distributions.Categorical(logits=res["dip"]).sample().item(),
                 "economy": [torch.distributions.Categorical(logits=l).sample().item() for l in res["eco"]],
@@ -183,8 +200,21 @@ class StrategyLightningModule(pl.LightningModule):
                 "fortify_tile": torch.distributions.Categorical(logits=res["mil_fortify"]).sample().item()
             }
 
+            # Aggression Mode: If target is an ENEMY, slot 2 = 1.0
+            if self.env.current_turn % self.goal_persistence == 0:
+                target_idx = action["target_tile"]
+                tr, tc = target_idx // 16, target_idx % 16
+                is_enemy = self.obs["board_state"][0, tr, tc] == 2
+                self.current_goal = res["goal"].clone()
+                self.current_goal[0, 2] = 1.0 if is_enemy else 0.0
+
             next_obs, reward, terminated, truncated, next_info = self.env.step(action, self.soldier_agent, self.current_goal)
             
+            if "soldier_accuracy" in next_info:
+                closer, total = next_info["soldier_accuracy"]
+                if total > 0:
+                    self.log("tactical/soldier_accuracy", closer / total, prog_bar=True)
+
             self.total_reward += reward
             trajectory_data.append({'reward': reward, 'value': res["value"].item(), 'done': terminated or truncated})
             self.buffer.add(self.obs, action, reward, next_obs, terminated, truncated, self.info)
@@ -250,10 +280,16 @@ class StrategyLightningModule(pl.LightningModule):
         
         adv = (pre_adv - pre_adv.mean()) / (pre_adv.std() + 1e-8)
         d_dip, d_tar, d_fort = torch.distributions.Categorical(logits=res["dip"]), torch.distributions.Categorical(logits=res["mil"]), torch.distributions.Categorical(logits=res["mil_fortify"])
+        
+        # Entropy for exploration
+        entropy = d_dip.entropy().mean() + d_tar.entropy().mean() + d_fort.entropy().mean()
         lp = d_dip.log_prob(a_dip) + d_tar.log_prob(a_target) + d_fort.log_prob(a_fort)
-        for i, l in enumerate(res["eco"]): lp += torch.distributions.Categorical(logits=l).log_prob(a_eco[:, i])
+        for i, l in enumerate(res["eco"]): 
+            dist = torch.distributions.Categorical(logits=l)
+            lp += dist.log_prob(a_eco[:, i])
+            entropy += dist.entropy().mean()
 
-        actor_loss = -(lp * adv).mean()
+        actor_loss = -(lp * adv).mean() - 0.01 * entropy
         critic_loss = F.huber_loss(res["value"].view(-1), pre_returns.view(-1), delta=1.0)
         total_loss = actor_loss + 0.1 * critic_loss
         self.log("loss/total", total_loss, prog_bar=True)
@@ -265,6 +301,7 @@ class StrategyLightningModule(pl.LightningModule):
         return DataLoader(RLDataset(self.buffer, self.batch_size), batch_size=None)
 
 def train_agent_lightning():
+    torch.set_float32_matmul_precision('medium')
     BATCH_SIZE, BUFFER_CAP, COLLECT_STEPS, EPOCHS, LR = 128, 10000, 1024, 1000, 3e-5
 
     sandbox = SoldierSandbox()
