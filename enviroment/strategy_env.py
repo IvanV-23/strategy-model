@@ -156,7 +156,7 @@ class StrategyEnv(gym.Env):
         if terminated or truncated: return self._finalize_step(reward, terminated, truncated)
 
         # 0.2 SOLDIER LOGIC
-        if self.current_turn > 0 and self.current_turn % 100 == 0:
+        if self.current_turn > 0 and self.current_turn % 50 == 0:
             self.board_env.spawn_soldiers(player_id=2, count=1)
         if self.current_turn == 1: # Spawn initial soldiers for player 1
             self.board_env.spawn_soldiers(player_id=1, count=2)

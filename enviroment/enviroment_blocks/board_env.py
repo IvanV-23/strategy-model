@@ -18,7 +18,9 @@ class BoardEnv:
         self.grid = np.zeros((self.rows, self.cols, 7), dtype=np.int32)
         self.grid[:, :, 3] = resource_layer
         self.grid[0, 0, :3] = [1, 3, 10]
+        self.grid[0, 0, 6] = 2 # Default Fortification Level 2
         self.grid[self.rows-1, self.cols-1, :3] = [2, 3, 10]
+        self.grid[self.rows-1, self.cols-1, 6] = 2 # Default Fortification Level 2
         if np.sum(resource_layer) == 0: self._generate_resources()
         self.p1_trade_manager.active_routes = []
         return self.grid

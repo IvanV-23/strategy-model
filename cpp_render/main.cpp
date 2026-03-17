@@ -29,8 +29,6 @@ public:
     int screenWidth, screenHeight;
     float zoom = 1.0f;
     int offsetX = 0, offsetY = 0;
-    int originX = 400; // Center of the screen X
-    int originY = 100; // Center of the screen Y
     float tileW = 64.0f;
     float tileH = 32.0f;
 
@@ -76,18 +74,18 @@ namespace Graphics {
         SDL_RenderDrawLine(renderer, p4.x, p4.y, p1.x, p1.y);
     }
 
-    void draw_iso_cube(SDL_Renderer* renderer, const IsoCamera& cam, float x, float y, float h, float size, SDL_Color color) {
+    void draw_iso_box(SDL_Renderer* renderer, const IsoCamera& cam, float x, float y, float w, float d, float h, SDL_Color color, float z_start = 0.0f) {
         // Bottom Face
-        Point2D b1 = cam.project(x, y);
-        Point2D b2 = cam.project(x + size, y);
-        Point2D b3 = cam.project(x + size, y + size);
-        Point2D b4 = cam.project(x, y + size);
+        Point2D b1 = cam.project(x, y, z_start);
+        Point2D b2 = cam.project(x + w, y, z_start);
+        Point2D b3 = cam.project(x + w, y + d, z_start);
+        Point2D b4 = cam.project(x, y + d, z_start);
 
         // Top Face
-        Point2D t1 = cam.project(x, y, h);
-        Point2D t2 = cam.project(x + size, y, h);
-        Point2D t3 = cam.project(x + size, y + size, h);
-        Point2D t4 = cam.project(x, y + size, h);
+        Point2D t1 = cam.project(x, y, z_start + h);
+        Point2D t2 = cam.project(x + w, y, z_start + h);
+        Point2D t3 = cam.project(x + w, y + d, z_start + h);
+        Point2D t4 = cam.project(x, y + d, z_start + h);
 
         auto draw_quad = [&](Point2D p1, Point2D p2, Point2D p3, Point2D p4, SDL_Color col) {
             SDL_Vertex v[4];
@@ -103,8 +101,8 @@ namespace Graphics {
         SDL_Color side1 = { (Uint8)(color.r * 0.8), (Uint8)(color.g * 0.8), (Uint8)(color.b * 0.8), color.a };
         SDL_Color side2 = { (Uint8)(color.r * 0.6), (Uint8)(color.g * 0.6), (Uint8)(color.b * 0.6), color.a };
 
-        draw_quad(b1, b2, t2, t1, side1); // Front Left
-        draw_quad(b2, b3, t3, t2, side2); // Front Right
+        draw_quad(b1, b2, t2, t1, side1); // Side 1
+        draw_quad(b2, b3, t3, t2, side2); // Side 2
         draw_quad(t1, t2, t3, t4, color); // Top
 
         // Outlines
@@ -154,15 +152,12 @@ class BuildingRenderer : public BaseRenderer {
 public:
     void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
         int status = tile["status"];
-        if (status == 0) return;
+        if (status == 0 || status == 1 || status == 4) return; // Status 1 & 4 now handled by Sawmill
 
         SDL_Color col = {200, 200, 200, 255};
         float height = 0.5f;
 
-        if (status == 1 || status == 4) { // Mines
-            col = (status == 1) ? SDL_Color{150, 80, 255, 255} : SDL_Color{0, 255, 100, 255};
-            height = 0.4f;
-        } else if (status == 2 || status == 6) { // Warehouses
+        if (status == 2 || status == 6) { // Warehouses
             col = {210, 180, 140, 255};
             height = 0.6f;
         } else if (status == 3) { // Base
@@ -173,7 +168,35 @@ public:
             height = 0.2f;
         }
 
-        Graphics::draw_iso_cube(renderer, cam, (float)c + 0.2f, (float)r + 0.2f, height * cam.tileW, 0.6f, col);
+        Graphics::draw_iso_box(renderer, cam, (float)c + 0.2f, (float)r + 0.2f, 0.6f, 0.6f, height * cam.tileW, col);
+    }
+};
+
+class SawmillRenderer : public BaseRenderer {
+public:
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
+        int status = tile["status"];
+        if (status != 1 && status != 4) return; 
+
+        Point2D p = cam.project(c + 0.5f, r + 0.5f);
+        float z = cam.zoom;
+
+        // --- 2. THE MAIN CABIN (Brown Cube) ---
+        SDL_Color buildingCol = {139, 69, 19, 255}; // Saddle Brown
+        float cabinHeight = 0.6f * cam.tileW;
+        Graphics::draw_iso_box(renderer, cam, (float)c + 0.2f, (float)r + 0.2f, 0.3f, 0.3f, cabinHeight, buildingCol);
+
+        // --- 3. THE SLANTED ROOF (Slate Grey) ---
+        SDL_Color roofCol = {80, 80, 90, 255};
+        Graphics::draw_iso_box(renderer, cam, (float)c + 0.15f, (float)r + 0.15f, 0.7f, 0.7f, 0.1f * cam.tileW, roofCol, cabinHeight); 
+
+        // --- 4. THE LOG PILE ---
+        SDL_Color logCol = {101, 67, 33, 255};
+        for(int i = 0; i < 3; ++i) {
+            SDL_Rect log = { p.x + (int)(10*z), p.y - (int)((5 + i*4)*z), (int)(15*z), (int)(3*z) };
+            SDL_SetRenderDrawColor(renderer, logCol.r, logCol.g, logCol.b, 255);
+            SDL_RenderFillRect(renderer, &log);
+        }
     }
 };
 
@@ -182,71 +205,98 @@ public:
     void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
         if (!tile.contains("wood") || tile["wood"].get<int>() <= 0) return;
 
-        // Calculate the base position of the tree on the tile
-        int screen_x = cam.originX + (c - r) * (cam.tileW / 2);
-        int screen_y = cam.originY + (c + r) * (cam.tileH / 2);
+        // Don't draw a tree if there's a sawmill (status 1 or 4) on this tile
+        int status = tile["status"];
+        if (status == 1 || status == 4) return;
 
-        // 1. Drop Shadow (Makes it look grounded)
+        // Use the camera projection to stay locked to the grid
+        Point2D p = cam.project(c + 0.5f, r + 0.5f);
+        float z = cam.zoom;
+
+        // 1. Drop Shadow (Grounded)
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 60); 
-        Graphics::fill_circle(renderer, screen_x, screen_y, 10);
+        Graphics::fill_circle(renderer, p.x, p.y, (int)(10 * z));
 
-        // 2. Trunk (Brown Log)
+        // 2. Trunk (Brown Log) - Scaled by Zoom
         SDL_SetRenderDrawColor(renderer, 101, 67, 33, 255);
-        SDL_Rect trunk = { screen_x - 3, screen_y - 25, 6, 25 };
+        int trunkW = (int)(6 * z);
+        int trunkH = (int)(25 * z);
+        SDL_Rect trunk = { p.x - trunkW / 2, p.y - trunkH, trunkW, trunkH };
         SDL_RenderFillRect(renderer, &trunk);
 
-        // 3. Rounded Crown (3 Layers for "3D" depth)
-        int crownY = screen_y - 35;
+        // 3. Rounded Crown (3 Layers for "3D" depth) - Scaled by Zoom
+        int crownY = p.y - (int)(35 * z);
         
-        // Bottom/Dark layer
+        // Bottom layer
         SDL_SetRenderDrawColor(renderer, 20, 100, 20, 255);
-        Graphics::fill_circle(renderer, screen_x, crownY, 18);
+        Graphics::fill_circle(renderer, p.x, crownY, (int)(18 * z));
         
         // Middle layer
         SDL_SetRenderDrawColor(renderer, 34, 139, 34, 255);
-        Graphics::fill_circle(renderer, screen_x, crownY - 4, 14);
+        Graphics::fill_circle(renderer, p.x, crownY - (int)(4 * z), (int)(14 * z));
         
         // Top highlight
         SDL_SetRenderDrawColor(renderer, 60, 200, 60, 255);
-        Graphics::fill_circle(renderer, screen_x - 3, crownY - 7, 7);
+        Graphics::fill_circle(renderer, p.x - (int)(3 * z), crownY - (int)(7 * z), (int)(7 * z));
+    }
+};
+
+class WallRenderer : public BaseRenderer {
+public:
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
+        if (!tile.contains("fortified")) return;
+        int f_lvl = tile["fortified"];
+        if (f_lvl <= 0) return;
+
+        SDL_Color wallCol = (f_lvl == 1) ? SDL_Color{160, 120, 60, 255} : SDL_Color{140, 140, 150, 255};
+        float wallH = (f_lvl == 1) ? 0.2f : 0.4f;
+        float wallT = (f_lvl == 1) ? 0.1f : 0.15f; // Thickness
+
+        // North Wall
+        Graphics::draw_iso_box(renderer, cam, (float)c, (float)r, 1.0f, wallT, wallH * cam.tileW, wallCol);
+        // West Wall
+        Graphics::draw_iso_box(renderer, cam, (float)c, (float)r, wallT, 1.0f, wallH * cam.tileW, wallCol);
+        // South Wall
+        Graphics::draw_iso_box(renderer, cam, (float)c, (float)r + 1.0f - wallT, 1.0f, wallT, wallH * cam.tileW, wallCol);
+        // East Wall
+        Graphics::draw_iso_box(renderer, cam, (float)c + 1.0f - wallT, (float)r, wallT, 1.0f, wallH * cam.tileW, wallCol);
     }
 };
 
 class UnitRenderer : public BaseRenderer {
 public:
     void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
+        // Player 1 Soldiers (Red) - Positioned near the "back" corner of the tile
         if (tile.contains("soldiers") && tile["soldiers"].get<int>() > 0) {
-            draw_unit(renderer, cam, r, c, tile["soldiers"].get<int>(), {255, 50, 50, 255}, 0.1f);
+            draw_unit(renderer, cam, r, c, tile["soldiers"].get<int>(), {255, 50, 50, 255}, -0.35f);
         }
+        // Player 2 Soldiers (Orange) - Positioned near the "front" corner of the tile
         if (tile.contains("p2_soldiers") && tile["p2_soldiers"].get<int>() > 0) {
-            draw_unit(renderer, cam, r, c, tile["p2_soldiers"].get<int>(), {255, 120, 0, 255}, 0.3f);
+            draw_unit(renderer, cam, r, c, tile["p2_soldiers"].get<int>(), {255, 120, 0, 255}, 0.35f);
         }
     }
 
 private:
     void draw_unit(SDL_Renderer* renderer, const IsoCamera& cam, int r, int c, int count, SDL_Color col, float offset) {
-        Point2D p = cam.project(c + 0.5f + offset, r + 0.5f + offset, 10.0f);
+        float z_factor = cam.zoom;
+        // Base of the unit on the ground (z=0)
+        // Using the offset for both x and y to push them to opposite corners
+        Point2D p = cam.project(c + 0.5f + offset, r + 0.5f + offset, 0.0f);
+        
+        int unit_radius = (int)(7 * z_factor);
+        int unit_height = (int)(25 * z_factor); // Taller soldiers
+
         SDL_SetRenderDrawColor(renderer, col.r, col.g, col.b, col.a);
         
-        // Draw a simple 3D-ish cylinder/pill for units
-        for (int i = 0; i < 15; ++i) {
-            draw_circle(renderer, p.x, p.y - i, 6);
+        // Draw 3D cylinder
+        for (int i = 0; i < unit_height; ++i) {
+            Graphics::fill_circle(renderer, p.x, p.y - i, unit_radius);
         }
+        
+        // Head highlight (White)
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-        draw_circle(renderer, p.x, p.y - 15, 6);
-    }
-
-    void draw_circle(SDL_Renderer* renderer, int x, int y, int radius) {
-        for (int w = 0; w < radius * 2; w++) {
-            for (int h = 0; h < radius * 2; h++) {
-                int dx = radius - w;
-                int dy = radius - h;
-                if ((dx*dx + dy*dy) <= (radius * radius)) {
-                    SDL_RenderDrawPoint(renderer, x + dx, y + dy);
-                }
-            }
-        }
+        Graphics::fill_circle(renderer, p.x, p.y - unit_height, unit_radius);
     }
 };
 
@@ -319,16 +369,15 @@ public:
             int cols = (int)board[0].size();
 
             // Depth Sorting: Render from back (0,0) to front (max, max)
-            // In isometric, back is min(x+y), front is max(x+y)
-            for (int sum = 0; sum <= (rows + cols - 2); ++sum) {
-                for (int r = 0; r < rows; ++r) {
-                    int c = sum - r;
-                    if (c >= 0 && c < cols) {
-                        tile_renderer.render(renderer, cam, board[r][c], r, c);
-                        tree_renderer.render(renderer, cam, board[r][c], r, c);
-                        building_renderer.render(renderer, cam, board[r][c], r, c);
-                        unit_renderer.render(renderer, cam, board[r][c], r, c);
-                    }
+            // Nested r, c loops provide the correct isometric Back-to-Front order.
+            for (int r = 0; r < rows; ++r) {
+                for (int c = 0; c < cols; ++c) {
+                    tile_renderer.render(renderer, cam, board[r][c], r, c);
+                    wall_renderer.render(renderer, cam, board[r][c], r, c);
+                    tree_renderer.render(renderer, cam, board[r][c], r, c);
+                    sawmill_renderer.render(renderer, cam, board[r][c], r, c);
+                    building_renderer.render(renderer, cam, board[r][c], r, c);
+                    unit_renderer.render(renderer, cam, board[r][c], r, c);
                 }
             }
         }
@@ -348,7 +397,9 @@ private:
     TTF_Font* font = nullptr;
 
     TileRenderer tile_renderer;
+    WallRenderer wall_renderer;
     TreeRenderer tree_renderer;
+    SawmillRenderer sawmill_renderer;
     BuildingRenderer building_renderer;
     UnitRenderer unit_renderer;
 
