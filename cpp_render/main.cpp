@@ -152,7 +152,8 @@ class BuildingRenderer : public BaseRenderer {
 public:
     void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
         int status = tile["status"];
-        if (status == 0 || status == 1 || status == 4) return; // Status 1 & 4 now handled by Sawmill
+        // Status 1, 4 (Sawmill) and 5, 7 (Crops) are handled by dedicated renderers
+        if (status == 0 || status == 1 || status == 4 || status == 5 || status == 7) return; 
 
         SDL_Color col = {200, 200, 200, 255};
         float height = 0.5f;
@@ -163,12 +164,37 @@ public:
         } else if (status == 3) { // Base
             col = {255, 215, 0, 255};
             height = 0.8f;
-        } else if (status == 5 || status == 7) { // Crops
-            col = {100, 180, 50, 255};
-            height = 0.2f;
         }
 
         Graphics::draw_iso_box(renderer, cam, (float)c + 0.2f, (float)r + 0.2f, 0.6f, 0.6f, height * cam.tileW, col);
+    }
+};
+
+class CropRenderer : public BaseRenderer {
+public:
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
+        int status = tile["status"];
+        if (status != 5 && status != 7) return; // Only render for crop statuses
+
+        float z = cam.zoom;
+        SDL_Color soilCol = {101, 67, 33, 255}; // Dark Earth
+        SDL_Color plantCol = {100, 200, 50, 255}; // Bright Crop Green
+
+        // 1. Draw the Tilled Soil Base
+        Graphics::draw_iso_box(renderer, cam, (float)c + 0.1f, (float)r + 0.1f, 0.8f, 0.8f, 0.05f * cam.tileW, soilCol);
+
+        // 2. Draw the Furrows (Rows) and Tufts
+        for (float row_off = 0.25f; row_off <= 0.75f; row_off += 0.25f) {
+            for (float col_off = 0.2f; col_off <= 0.8f; col_off += 0.2f) {
+                Graphics::draw_iso_box(renderer, cam, 
+                    (float)c + col_off, 
+                    (float)r + row_off, 
+                    0.1f, 0.1f, 
+                    0.15f * cam.tileW, 
+                    plantCol, 
+                    0.05f * cam.tileW); 
+            }
+        }
     }
 };
 
@@ -375,6 +401,7 @@ public:
                     tile_renderer.render(renderer, cam, board[r][c], r, c);
                     wall_renderer.render(renderer, cam, board[r][c], r, c);
                     tree_renderer.render(renderer, cam, board[r][c], r, c);
+                    crop_renderer.render(renderer, cam, board[r][c], r, c);
                     sawmill_renderer.render(renderer, cam, board[r][c], r, c);
                     building_renderer.render(renderer, cam, board[r][c], r, c);
                     unit_renderer.render(renderer, cam, board[r][c], r, c);
@@ -399,6 +426,7 @@ private:
     TileRenderer tile_renderer;
     WallRenderer wall_renderer;
     TreeRenderer tree_renderer;
+    CropRenderer crop_renderer;
     SawmillRenderer sawmill_renderer;
     BuildingRenderer building_renderer;
     UnitRenderer unit_renderer;
