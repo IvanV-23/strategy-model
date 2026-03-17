@@ -462,6 +462,24 @@ public:
             }
         }
 
+        // PASS 3: ANIMATIONS (Overlay)
+        if (state.contains("shot_events")) {
+            for (const auto& shot : state["shot_events"]) {
+                if (shot.contains("from") && shot.contains("to")) {
+                    Point2D p_from = cam.project(shot["from"][1].get<float>() + 0.5f, shot["from"][0].get<float>() + 0.5f, 20.0f);
+                    Point2D p_to = cam.project(shot["to"][1].get<float>() + 0.5f, shot["to"][0].get<float>() + 0.5f, 10.0f);
+
+                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 200); // White beam
+                    SDL_RenderDrawLine(renderer, p_from.x, p_from.y, p_to.x, p_to.y);
+                    
+                    // Small burst at target
+                    Graphics::fill_circle(renderer, p_to.x, p_to.y, (int)(4 * cam.zoom));
+                    // Small burst at source
+                    Graphics::fill_circle(renderer, p_from.x, p_from.y, (int)(3 * cam.zoom));
+                }
+            }
+        }
+
         draw_ui(state);
         SDL_RenderPresent(renderer);
     }
