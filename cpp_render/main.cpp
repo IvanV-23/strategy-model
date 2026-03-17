@@ -116,6 +116,30 @@ namespace Graphics {
         SDL_RenderDrawLine(renderer, b3.x, b3.y, t3.x, t3.y);
     }
 
+    void draw_iso_box_stacked(SDL_Renderer* renderer, const IsoCamera& cam, float x, float y, float w, float d, float h, SDL_Color color, float z_start) {
+            // We manually offset the projection by z_start since we can't change the original function
+            // This is a "wrapper" that simulates the z-axis offset
+            draw_iso_box(renderer, cam, x, y, w, d, h, color, z_start); 
+        }
+
+    void draw_complete_building(SDL_Renderer* renderer, const IsoCamera& cam, float x, float y, float w, float d, float wallH, float roofH, SDL_Color wallCol, SDL_Color roofCol) {
+        // Draw the four walls using your existing box logic (if it exists) 
+        // or a simple local implementation to ensure it works.
+        
+        // 1. Walls
+        draw_iso_box(renderer, cam, x, y, w, d, wallH, wallCol, 0.0f);
+
+        // 2. The Roof (Inclined/Pitched effect)
+        // We draw two slabs that meet in the middle
+        float midW = w / 2.0f;
+        
+        // Left pitch
+        draw_iso_box(renderer, cam, x - 0.05f, y - 0.05f, midW + 0.05f, d + 0.1f, roofH, roofCol, wallH);
+        // Right pitch
+        draw_iso_box(renderer, cam, x + midW, y - 0.05f, midW + 0.05f, d + 0.1f, roofH, roofCol, wallH);
+    }
+
+
     static void fill_circle(SDL_Renderer* renderer, int x, int y, int radius) {
         for (int w = 0; w < radius * 2; w++) {
             for (int h = 0; h < radius * 2; h++) {
@@ -152,21 +176,42 @@ class BuildingRenderer : public BaseRenderer {
 public:
     void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
         int status = tile["status"];
-        // Status 1, 4 (Sawmill) and 5, 7 (Crops) are handled by dedicated renderers
-        if (status == 0 || status == 1 || status == 4 || status == 5 || status == 7) return; 
+        if (status == 0 || status == 1 || status == 4 || status == 5 || status == 7 || status == 2 || status == 6) return; 
 
         SDL_Color col = {200, 200, 200, 255};
         float height = 0.5f;
 
-        if (status == 2 || status == 6) { // Warehouses
-            col = {210, 180, 140, 255};
-            height = 0.6f;
-        } else if (status == 3) { // Base
+        if (status == 3) { // Base
             col = {255, 215, 0, 255};
             height = 0.8f;
         }
 
+        // Fixed: Added Graphics:: prefix
         Graphics::draw_iso_box(renderer, cam, (float)c + 0.2f, (float)r + 0.2f, 0.6f, 0.6f, height * cam.tileW, col);
+    }
+};
+
+class WarehouseRenderer : public BaseRenderer {
+public:
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
+        int status = tile["status"];
+        if (status != 2 && status != 6) return; 
+
+        SDL_Color beige = {210, 180, 140, 255};
+        SDL_Color slate = {60, 60, 70, 255};
+        
+        // This uses the new specialized function I added to your Graphics namespace
+        Graphics::draw_complete_building(
+            renderer, cam, 
+            (float)c + 0.2f, (float)r + 0.2f, 
+            0.6f, 0.6f, 
+            0.4f * cam.tileW, 0.1f * cam.tileW, 
+            beige, slate
+        );
+
+        // Fixed: Added Graphics:: prefix for the crate
+        SDL_Color crateCol = {139, 69, 19, 255};
+        Graphics::draw_iso_box(renderer, cam, (float)c + 0.8f, (float)r + 0.2f, 0.15f, 0.15f, 0.1f * cam.tileW, crateCol, 0.0f);
     }
 };
 
@@ -394,15 +439,23 @@ public:
             int rows = (int)board.size();
             int cols = (int)board[0].size();
 
-            // Depth Sorting: Render from back (0,0) to front (max, max)
-            // Nested r, c loops provide the correct isometric Back-to-Front order.
+            // PASS 1: GROUND TILES
+            // Draw all tile floors first so nothing can ever cover objects from behind
             for (int r = 0; r < rows; ++r) {
                 for (int c = 0; c < cols; ++c) {
                     tile_renderer.render(renderer, cam, board[r][c], r, c);
+                }
+            }
+
+            // PASS 2: OBJECTS (Back-to-Front)
+            // Render all objects on top of the established floor
+            for (int r = 0; r < rows; ++r) {
+                for (int c = 0; c < cols; ++c) {
                     wall_renderer.render(renderer, cam, board[r][c], r, c);
                     tree_renderer.render(renderer, cam, board[r][c], r, c);
                     crop_renderer.render(renderer, cam, board[r][c], r, c);
                     sawmill_renderer.render(renderer, cam, board[r][c], r, c);
+                    warehouse_renderer.render(renderer, cam, board[r][c], r, c);
                     building_renderer.render(renderer, cam, board[r][c], r, c);
                     unit_renderer.render(renderer, cam, board[r][c], r, c);
                 }
@@ -428,6 +481,7 @@ private:
     TreeRenderer tree_renderer;
     CropRenderer crop_renderer;
     SawmillRenderer sawmill_renderer;
+    WarehouseRenderer warehouse_renderer;
     BuildingRenderer building_renderer;
     UnitRenderer unit_renderer;
 
@@ -451,8 +505,22 @@ private:
             draw_text("GOLD: " + std::to_string((int)res[0].get<double>()), 20, 20, {255, 215, 0, 255});
             draw_text("WOOD: " + std::to_string((int)res[1].get<double>()), 150, 20, {150, 100, 50, 255});
         }
+
+        // Count soldiers from board data
+        int p1_sols = 0, p2_sols = 0;
+        if (state.contains("board")) {
+            for (const auto& row : state["board"]) {
+                for (const auto& tile : row) {
+                    if (tile.contains("soldiers")) p1_sols += tile["soldiers"].get<int>();
+                    if (tile.contains("p2_soldiers")) p2_sols += tile["p2_soldiers"].get<int>();
+                }
+            }
+        }
+        draw_text("P1 SOL: " + std::to_string(p1_sols), 300, 20, {255, 50, 50, 255});
+        draw_text("P2 SOL: " + std::to_string(p2_sols), 450, 20, {255, 120, 0, 255});
+
         if (state.contains("turn")) {
-            draw_text("TURN: " + std::to_string(state["turn"].get<int>()), width / 2 - 40, 20, {255, 255, 255, 255});
+            draw_text("TURN: " + std::to_string(state["turn"].get<int>()), width / 2 + 100, 20, {255, 255, 255, 255});
         }
         
         draw_text("Arrows: Pan | +/-: Zoom", width - 220, 20, {180, 180, 180, 255});

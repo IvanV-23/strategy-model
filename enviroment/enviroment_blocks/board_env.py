@@ -47,11 +47,13 @@ class BoardEnv:
         total_moves = 0
         p1_base, p2_base = (0, 0), (self.rows - 1, self.cols - 1)
         
-        # 1. Process P1 Soldiers (Tactical Agent)
+        # --- 1. PREPARE NEXT STATES ---
         next_p1 = np.zeros((self.rows, self.cols), dtype=np.int32)
-        p1_indices = np.argwhere(self.grid[:, :, 4] > 0)
+        next_p2 = np.zeros((self.rows, self.cols), dtype=np.int32)
         
-        full_obs = self.full_board_state() # (8, rows, cols)
+        # --- 2. PROCESS P1 SOLDIERS (Tactical Agent) ---
+        p1_indices = np.argwhere(self.grid[:, :, 4] > 0)
+        full_obs = self.full_board_state()
         
         for r, c in p1_indices:
             count = self.grid[r, c, 4]
@@ -59,11 +61,9 @@ class BoardEnv:
             
             if soldier_agent is not None and p1_goal is not None:
                 total_moves += 1
-                # Hybrid Goal: Inject relative spatial intent into the first 2 slots
                 current_p1_goal = p1_goal.clone()
                 if target_tile is not None:
                     tr, tc = target_tile
-                    # Relative Transformation: (target_xy - soldier_xy) / board_size
                     current_p1_goal[0, 0] = float(tr - r) / 20.0
                     current_p1_goal[0, 1] = float(tc - c) / 20.0
 
@@ -79,28 +79,21 @@ class BoardEnv:
                 
                 if target_tile is not None:
                     tr, tc = target_tile
-                    old_dist = abs(tr - r) + abs(tc - c)
-                    new_dist = abs(tr - nr) + abs(tc - nc)
-                    if new_dist < old_dist:
+                    if (abs(tr - nr) + abs(tc - nc)) < (abs(tr - r) + abs(tc - c)):
                         moved_closer += 1
             else:
                 neighbors = self._get_neighbors(r, c)
-                if neighbors:
-                    nr, nc = neighbors[np.random.randint(len(neighbors))]
+                if neighbors: nr, nc = neighbors[np.random.randint(len(neighbors))]
 
-            # Resolve P1 combat at (nr, nc)
-            target_owner = self.grid[nr, nc, 0]
-            if target_owner == 2:
+            # Resolve combat for P1 at destination
+            if self.grid[nr, nc, 0] == 2: # Enemy Tile
                 attack = count * 200
                 defense = self.grid[nr, nc, 2] + (20 if self.grid[nr, nc, 1] > 0 else 0) + (self.grid[nr, nc, 5] * 200) + 100 + (100 if self.grid[nr, nc, 6] == 1 else 0)
                 if attack > defense:
                     if (nr, nc) == p2_base: game_terminated = True
                     defeated_workers += int(self.grid[nr, nc, 2])
-                    # Damage Dealt: Soldiers (200 each) + Buildings (Status > 0) + Fortifications (Status 6)
                     damage_dealt += (self.grid[nr, nc, 5] * 200.0)
                     if self.grid[nr, nc, 1] > 0: damage_dealt += 100.0
-                    if self.grid[nr, nc, 6] > 0: damage_dealt += 100.0 * self.grid[nr, nc, 6]
-
                     self.grid[nr, nc, 0] = 0; self.grid[nr, nc, 1] = 0; self.grid[nr, nc, 2] = 0
                     self.grid[nr, nc, 5] = 0; self.grid[nr, nc, 6] = 0
                     next_p1[nr, nc] += count
@@ -113,15 +106,15 @@ class BoardEnv:
                 else:
                     next_p1[nr, nc] += count
 
-        # 2. Process P2 Soldiers (Random)
-        next_p2 = np.zeros((self.rows, self.cols), dtype=np.int32)
-        for r, c in np.argwhere(self.grid[:, :, 5] > 0):
+        # --- 3. PROCESS P2 SOLDIERS (Random Movement) ---
+        p2_indices = np.argwhere(self.grid[:, :, 5] > 0)
+        for r, c in p2_indices:
             count = self.grid[r, c, 5]
             neighbors = self._get_neighbors(r, c)
-            if not neighbors: next_p2[r, c] += count; continue
-            nr, nc = neighbors[np.random.randint(len(neighbors))]
+            nr, nc = r, c
+            if neighbors: nr, nc = neighbors[np.random.randint(len(neighbors))]
             
-            if self.grid[nr, nc, 0] == 1:
+            if self.grid[nr, nc, 0] == 1: # P1 Tile
                 attack = count * 200
                 defense = self.grid[nr, nc, 2] + (20 if self.grid[nr, nc, 1] > 0 else 0) + (next_p1[nr, nc] * 200) + 100 + (100 if self.grid[nr, nc, 6] == 1 else 0)
                 if attack > defense:
@@ -137,8 +130,11 @@ class BoardEnv:
                         self.lost_soldiers_combat += int(next_p1[nr, nc])
                         next_p1[nr, nc] = 0; next_p2[nr, nc] += count
                     else:
-                        next_p2[nr, nc] += count
+                        pass # P2 soldier dies, next_p1 stays
+                else:
+                    next_p2[nr, nc] += count
 
+        # --- 4. FINALIZE GRID ---
         self.grid[:, :, 4] = next_p1
         self.grid[:, :, 5] = next_p2
         return game_terminated, defeated_workers, (moved_closer, total_moves), damage_dealt
