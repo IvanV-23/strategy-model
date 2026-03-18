@@ -22,6 +22,7 @@ class ReplayBuffer:
         self.actions_diplomacy = np.zeros((capacity,), dtype=np.int64)
         self.actions_economy = np.zeros((capacity, 6), dtype=np.int64) 
         self.actions_target = np.zeros((capacity,), dtype=np.int64)
+        self.actions_sol_target = np.zeros((capacity,), dtype=np.int64) # NEW
         self.actions_fortify = np.zeros((capacity,), dtype=np.int64) # NEW
         
         # Masking dimensions from action space and build mask
@@ -58,6 +59,7 @@ class ReplayBuffer:
         self.actions_diplomacy[self.idx] = action["diplomacy"]
         self.actions_economy[self.idx] = action["economy"] 
         self.actions_target[self.idx] = action["target_tile"]
+        self.actions_sol_target[self.idx] = action.get("soldier_target_tile", 0) # NEW
         self.actions_fortify[self.idx] = action.get("fortify_tile", 0) # NEW
         
         # Store masks from the info dict
@@ -83,8 +85,8 @@ class ReplayBuffer:
                     "board_state": torch.from_numpy(board_array[idxs]),
                     "player_resources": torch.from_numpy(stats_array[idxs, 0:9]),
                     "opponent_resources": torch.from_numpy(stats_array[idxs, 9:12]),
-                    "mine_stats": torch.from_numpy(stats_array[idxs, 12:26]), 
-                    "turn_number": torch.from_numpy(stats_array[idxs, 26:27]), 
+                    "board_stats": torch.from_numpy(stats_array[idxs, 12:27]), 
+                    "turn_number": torch.from_numpy(stats_array[idxs, 27:28]), 
                     "full_stats": torch.from_numpy(stats_array[idxs]) 
                 }
 
@@ -93,6 +95,7 @@ class ReplayBuffer:
                 torch.from_numpy(self.actions_diplomacy[idxs]),
                 torch.from_numpy(self.actions_economy[idxs]),
                 torch.from_numpy(self.actions_target[idxs]),
+                torch.from_numpy(self.actions_sol_target[idxs]), # NEW
                 torch.from_numpy(self.actions_fortify[idxs]), # NEW
                 torch.from_numpy(self.rewards[idxs]),
                 get_dict(self.next_stats, self.next_board_states),

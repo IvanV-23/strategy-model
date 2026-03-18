@@ -2,37 +2,23 @@ import gymnasium as gym
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, IterableDataset
-from typing import Iterator, Tuple
+from typing import Iterator, Tuple, Dict, Any
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import MLFlowLogger
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.callbacks import EarlyStopping
 import numpy as np
-import sys
-import os
-
-# Add the parent directory to sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from enviroment.strategy_env import StrategyEnv
-from models.marl_critic import MARL_Strategy, SoldierAgent
 from data.replay_buffer import ReplayBuffer
-
-class RLDataset(IterableDataset):
-    def __init__(self, buffer: ReplayBuffer, batch_size: int):
-        super().__init__()
-        self.buffer = buffer
-        self.batch_size = batch_size
-
-    def __iter__(self) -> Iterator[Tuple]:
-        while True:
-            if self.buffer.size >= self.batch_size:
-                yield self.buffer.sample(self.batch_size)
+from models.marl_critic import MARL_Strategy, SoldierAgent
 
 class SoldierSandbox:
-    """Trains the Tactical SoldierAgent to reach goals in a simplified environment."""
+    """
+    Simulates a tactical environment to pre-train the SoldierAgent.
+    """
     def __init__(self):
         self.model = SoldierAgent(in_channels=8, goal_dim=16)
-        self.opt = torch.optim.Adam(self.model.parameters(), lr=1e-3)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
 
     def train(self, steps=5000):
         print("Training Tactical SoldierAgent in sandbox...")
@@ -45,13 +31,9 @@ class SoldierSandbox:
             goal[:, 2] = (torch.rand(32) > 0.5).float()
 
             # Hybrid Goal: First 2 slots are relative (dr, dc)
-            # dr > 0 means target is South, dr < 0 means target is North
-            # dc > 0 means target is East, dc < 0 means target is West
             target = []
             for b in range(32):
                 dr, dc = goal[b, 0].item(), goal[b, 1].item()
-                # If Aggression is on, maybe move faster? 
-                # For now, just follow the same logic but the model sees the bit.
                 if abs(dr) > abs(dc):
                     action = 2 if dr > 0 else 1 # South if dr > 0, else North
                 elif abs(dc) > 0:
@@ -60,127 +42,90 @@ class SoldierSandbox:
                     action = 0 # Stay
                 target.append(action)
             
-            target = torch.tensor(target, dtype=torch.long)
-            
+            target = torch.tensor(target)
             logits = self.model(local_view, goal)
             loss = F.cross_entropy(logits, target)
             
-            self.opt.zero_grad()
+            self.optimizer.zero_grad()
             loss.backward()
-            self.opt.step()
-            if i % 1000 == 0: print(f"Sandbox Step {i}, Loss: {loss.item():.4f}")
-        
-        # Freeze model
-        for p in self.model.parameters(): p.requires_grad = False
-        print("Tactical SoldierAgent trained and frozen.")
+            self.optimizer.step()
+            
+            if i % 1000 == 0:
+                print(f"Sandbox Step {i}, Loss: {loss.item():.4f}")
         return self.model
 
+class RLDataset(IterableDataset):
+    def __init__(self, buffer: ReplayBuffer, batch_size: int):
+        self.buffer = buffer
+        self.batch_size = batch_size
+
+    def __iter__(self) -> Iterator:
+        while True:
+            yield self.buffer.sample(self.batch_size)
+
 class StrategyLightningModule(pl.LightningModule):
-    def __init__(self, env: gym.Env, buffer: ReplayBuffer, lr: float, collect_steps: int, soldier_model: SoldierAgent, batch_size: int = 64):
+    def __init__(self, env: StrategyEnv, replay_buffer: ReplayBuffer, lr: float, collect_steps: int, soldier_model: SoldierAgent, batch_size: int = 64):
         super().__init__()
         self.env = env
-        self.buffer = buffer
+        self.buffer = replay_buffer
         self.lr = lr
         self.collect_steps = collect_steps
         self.batch_size = batch_size
-        self.gamma = 0.99
-        self.lam = 0.95
-        
         self.model = MARL_Strategy(in_channels=8, stats_dim=28)
         self.soldier_agent = soldier_model # Initially unfreezing for warm-up
         for p in self.soldier_agent.parameters(): 
             p.requires_grad = True
         
-        self.current_goal = None
-        self.goal_persistence = 10 # Change goal every 10 turns
-        
         self.obs, self.info = self.env.reset()
         self.total_reward = 0
+        self.goal_persistence = 5
+        self.register_buffer("current_goal", torch.zeros((1, 16)))
 
-    @torch.no_grad()
-    def _process_obs(self, obs_batch, info_batch=None, log=True):
+    def _process_obs(self, obs, info, log=True):
         device = self.device
-        if "board_stats" in obs_batch:
-            boards = torch.from_numpy(obs_batch["board_state"]).to(device, dtype=torch.float32).unsqueeze(0) / 255.0
-            stats_np = np.concatenate([obs_batch["player_resources"], obs_batch["opponent_resources"], obs_batch["board_stats"], [obs_batch["turn_number"]]]).astype(np.float32)
-            stats = torch.from_numpy(stats_np).to(device, dtype=torch.float32).unsqueeze(0) / 1000.0
+        if isinstance(obs, dict):
+            # Check if it's a batch or a single observation
+            is_batch = obs["board_state"].ndim == 4
+            
+            if is_batch:
+                boards = obs["board_state"].to(device)
+                stats = obs["full_stats"].to(device)
+                stats_raw = obs["board_stats"]
+                
+                # Info is a tuple of masks in training_step: (m_target, m_build, m_fort_mask)
+                t_mask, b_mask, f_mask = info
+                t_mask = t_mask.to(device)
+                b_mask = b_mask.to(device)
+                f_mask = f_mask.to(device)
+            else:
+                boards = torch.as_tensor(obs["board_state"], dtype=torch.float32).unsqueeze(0).to(device)
+                # Combine all stats parts: player_res (9) + opponent_res (3) + board_stats (15) + turn (1) = 28
+                s_np = np.concatenate([obs["player_resources"], obs["opponent_resources"], obs["board_stats"], [obs["turn_number"]]]).astype(np.float32)
+                stats = torch.as_tensor(s_np, dtype=torch.float32).unsqueeze(0).to(device)
+                t_mask = torch.as_tensor(info["action_mask"], dtype=torch.bool).unsqueeze(0).to(device)
+                b_mask = torch.as_tensor(info["build_mask"], dtype=torch.bool).unsqueeze(0).to(device)
+                f_mask = torch.as_tensor(info["fortify_target_mask"], dtype=torch.bool).unsqueeze(0).to(device)
+                stats_raw = obs["board_stats"]
         else:
-            boards = obs_batch["board_state"].to(device, dtype=torch.float32) / 255.0
-            stats = obs_batch["full_stats"].to(device, dtype=torch.float32) / 1000.0
+            # This case might be used if obs is a list of dicts
+            boards = torch.as_tensor(np.stack([o["board_state"] for o in obs]), dtype=torch.float32).to(device)
+            
+            stats_list = []
+            for o in obs:
+                s_np = np.concatenate([o["player_resources"], o["opponent_resources"], o["board_stats"], [o["turn_number"]]]).astype(np.float32)
+                stats_list.append(s_np)
+            stats = torch.as_tensor(np.stack(stats_list), dtype=torch.float32).to(device)
 
-        t_mask, b_mask, f_mask = None, None, None
-        if info_batch is not None:
-            if isinstance(info_batch, dict):
-                t_mask = torch.from_numpy(info_batch.get("action_mask")).to(device, dtype=torch.bool).view(1, -1)
-                b_mask = torch.from_numpy(info_batch.get("build_mask")).to(device, dtype=torch.bool).view(1, -1)
-                f_mask = torch.from_numpy(info_batch.get("fortify_target_mask")).to(device, dtype=torch.bool).view(1, -1)
-            else:
-                t_mask, b_mask, f_mask = info_batch[0].to(device, dtype=torch.bool), info_batch[1].to(device, dtype=torch.bool), info_batch[2].to(device, dtype=torch.bool)
-        else:
-            t_mask, b_mask, f_mask = torch.ones((1, 256), device=device, dtype=torch.bool), torch.ones((1, 8), device=device, dtype=torch.bool), torch.ones((1, 256), device=device, dtype=torch.bool)
-        
-        if log and "player_resources" in obs_batch:
-            res = torch.as_tensor(obs_batch["player_resources"], dtype=torch.float32)
-            if res.dim() == 1:
-                self.log("game_stats/player_gold", res[0])
-                self.log("game_stats/player_wood", res[1])
-                self.log("game_stats/player_workers", res[2])
-                self.log("game_stats/player_mines", res[3])
-                self.log("game_stats/player_food", res[4])
-                self.log("game_stats/gold_capacity", res[5])
-                self.log("game_stats/wood_capacity", res[6])
-                self.log("game_stats/worker_capacity", res[7])
-                self.log("game_stats/food_capacity", res[8])
-            else:
-                self.log("game_stats/player_gold", res[:, 0].mean())
-                self.log("game_stats/player_wood", res[:, 1].mean())
-                self.log("game_stats/player_workers", res[:, 2].mean())
-                self.log("game_stats/player_mines", res[:, 3].mean())
-                self.log("game_stats/player_food", res[:, 4].mean())
-                self.log("game_stats/gold_capacity", res[:, 5].mean())  
-                self.log("game_stats/wood_capacity", res[:, 6].mean())
-                self.log("game_stats/worker_capacity", res[:, 7].mean())
-                self.log("game_stats/food_capacity", res[:, 8].mean())
-        
-        # In batch mode, board_stats info is in 'full_stats' at indices 12 to 27
-        if "board_stats" in obs_batch:
-            stats_raw = obs_batch["board_stats"]
-        elif "full_stats" in obs_batch:
-            stats_raw = obs_batch["full_stats"][:, 12:27]
-        else:
-            stats_raw = None
+            t_mask = torch.as_tensor(np.stack([i["action_mask"] for i in info]), dtype=torch.bool).to(device)
+            b_mask = torch.as_tensor(np.stack([i["build_mask"] for i in info]), dtype=torch.bool).to(device)
+            f_mask = torch.as_tensor(np.stack([i["fortify_target_mask"] for i in info]), dtype=torch.bool).to(device)
+            stats_raw = np.stack([o["board_stats"] for o in obs])
 
         if log and stats_raw is not None:
             stats_raw = torch.as_tensor(stats_raw, dtype=torch.float32)
             if stats_raw.dim() > 1:
-                self.log("game_stats/mines", stats_raw[:, 1].mean())
-                self.log("game_stats/gold_income", stats_raw[:, 2].mean())
-                self.log("game_stats/wood_income", stats_raw[:, 3].mean())
-                self.log("game_stats/trade_routes", stats_raw[:, 4].mean())
-                self.log("game_stats/p1_tiles", stats_raw[:, 5].mean())
-                self.log("game_stats/p2_tiles", stats_raw[:, 6].mean())
-                self.log("game_stats/potential_trade_routes", stats_raw[:, 7].mean())
-                self.log("game_stats/crop_fields", stats_raw[:, 8].mean())
-                self.log("game_stats/net_income", stats_raw[:, 9].mean())
-                self.log("game_stats/lost_gold", stats_raw[:, 10].mean())
-                self.log("game_stats/lost_wood", stats_raw[:, 11].mean())
-                self.log("game_stats/lost_food", stats_raw[:, 12].mean())
-                self.log("game_stats/defeated_workers", stats_raw[:, 13].mean())
                 self.log("game_stats/player_soldiers", stats_raw[:, 14].mean())
             else:
-                self.log("game_stats/mines", stats_raw[1])
-                self.log("game_stats/gold_income", stats_raw[2])
-                self.log("game_stats/wood_income", stats_raw[3])
-                self.log("game_stats/trade_routes", stats_raw[4])
-                self.log("game_stats/p1_tiles", stats_raw[5])
-                self.log("game_stats/p2_tiles", stats_raw[6])
-                self.log("game_stats/potential_trade_routes", stats_raw[7])
-                self.log("game_stats/crop_fields", stats_raw[8])
-                self.log("game_stats/net_income", stats_raw[9])
-                self.log("game_stats/lost_gold", stats_raw[10])
-                self.log("game_stats/lost_wood", stats_raw[11])
-                self.log("game_stats/lost_food", stats_raw[12])
-                self.log("game_stats/defeated_workers", stats_raw[13])
                 self.log("game_stats/player_soldiers", stats_raw[14])
 
         return boards, stats, t_mask, b_mask, f_mask
@@ -197,12 +142,13 @@ class StrategyLightningModule(pl.LightningModule):
                 "diplomacy": torch.distributions.Categorical(logits=res["dip"]).sample().item(),
                 "economy": [torch.distributions.Categorical(logits=l).sample().item() for l in res["eco"]],
                 "target_tile": torch.distributions.Categorical(logits=res["mil"]).sample().item(),
+                "soldier_target_tile": torch.distributions.Categorical(logits=res["mil_soldier"]).sample().item(),
                 "fortify_tile": torch.distributions.Categorical(logits=res["mil_fortify"]).sample().item()
             }
 
-            # Aggression Mode: If target is an ENEMY, slot 2 = 1.0
+            # Aggression Mode: If soldier target is an ENEMY, slot 2 = 1.0
             if self.env.current_turn % self.goal_persistence == 0:
-                target_idx = action["target_tile"]
+                target_idx = action["soldier_target_tile"]
                 tr, tc = target_idx // 16, target_idx % 16
                 is_enemy = self.obs["board_state"][0, tr, tc] == 2
                 self.current_goal = res["goal"].clone()
@@ -214,6 +160,8 @@ class StrategyLightningModule(pl.LightningModule):
                 closer, total = next_info["soldier_accuracy"]
                 if total > 0:
                     self.log("tactical/soldier_accuracy", closer / total, prog_bar=True)
+                    # Strategic Alignment Reward: Bonus for moving closer to target
+                    reward += (closer / total) * 0.5
 
             self.total_reward += reward
             trajectory_data.append({'reward': reward, 'value': res["value"].item(), 'done': terminated or truncated})
@@ -255,14 +203,18 @@ class StrategyLightningModule(pl.LightningModule):
             board_t, stats_t, t_mask, b_mask, f_mask = self._process_obs(self.obs, self.info, log=False)
             with torch.no_grad():
                 res = self.model(board_t, stats_t, target_mask=t_mask, build_mask=b_mask, fortify_target_mask=f_mask)
-            eco_l = res["eco"]
+            
+            # Update goal from model output
+            self.current_goal = res["goal"].clone()
+
             action = {
                 "diplomacy": torch.distributions.Categorical(logits=res["dip"]).sample().item(),
-                "economy": [torch.distributions.Categorical(logits=l).sample().item() for l in eco_l],
+                "economy": [torch.distributions.Categorical(logits=l).sample().item() for l in res["eco"]],
                 "target_tile": torch.distributions.Categorical(logits=res["mil"]).sample().item(),
+                "soldier_target_tile": torch.distributions.Categorical(logits=res["mil_soldier"]).sample().item(),
                 "fortify_tile": torch.distributions.Categorical(logits=res["mil_fortify"]).sample().item()
             }
-            next_obs, reward, terminated, truncated, next_info = self.env.step(action, self.soldier_agent, res["goal"])
+            next_obs, reward, terminated, truncated, next_info = self.env.step(action, self.soldier_agent, self.current_goal)
             self.buffer.add(self.obs, action, reward, next_obs, terminated, truncated, self.info)
             self.obs, self.info = next_obs, next_info
             if terminated or truncated: self.obs, self.info = self.env.reset()
@@ -270,20 +222,22 @@ class StrategyLightningModule(pl.LightningModule):
     def on_fit_start(self): self._prefill_buffer()
 
     def training_step(self, batch, batch_idx):
-        (states, a_dip, a_eco, a_target, a_fort, rewards, _, t_d, t_c, m_target, m_build, m_fort_mask, pre_adv, pre_returns) = batch
+        (states, a_dip, a_eco, a_target, a_sol_target, a_fort, rewards, _, t_d, t_c, m_target, m_build, m_fort_mask, pre_adv, pre_returns) = batch
         boards, stats, t_mask, b_mask, f_mask = self._process_obs(states, (m_target, m_build, m_fort_mask))
         res = self.model(boards, stats, target_mask=t_mask, build_mask=b_mask, fortify_target_mask=f_mask)
         
         def stab(l): return torch.clamp(torch.nan_to_num(l, nan=0.0, posinf=20.0, neginf=-20.0), -20, 20)
-        res["dip"], res["mil"], res["mil_fortify"] = stab(res["dip"]), stab(res["mil"]), stab(res["mil_fortify"])
+        res["dip"], res["mil"], res["mil_soldier"], res["mil_fortify"] = stab(res["dip"]), stab(res["mil"]), stab(res["mil_soldier"]), stab(res["mil_fortify"])
         res["eco"] = [stab(l) for l in res["eco"]]
         
         adv = (pre_adv - pre_adv.mean()) / (pre_adv.std() + 1e-8)
-        d_dip, d_tar, d_fort = torch.distributions.Categorical(logits=res["dip"]), torch.distributions.Categorical(logits=res["mil"]), torch.distributions.Categorical(logits=res["mil_fortify"])
+        d_dip = torch.distributions.Categorical(logits=res["dip"])
+        d_tar = torch.distributions.Categorical(logits=res["mil"])
+        d_sol = torch.distributions.Categorical(logits=res["mil_soldier"])
+        d_fort = torch.distributions.Categorical(logits=res["mil_fortify"])
         
-        # Entropy for exploration
-        entropy = d_dip.entropy().mean() + d_tar.entropy().mean() + d_fort.entropy().mean()
-        lp = d_dip.log_prob(a_dip) + d_tar.log_prob(a_target) + d_fort.log_prob(a_fort)
+        entropy = d_dip.entropy().mean() + d_tar.entropy().mean() + d_sol.entropy().mean() + d_fort.entropy().mean()
+        lp = d_dip.log_prob(a_dip) + d_tar.log_prob(a_target) + d_sol.log_prob(a_sol_target) + d_fort.log_prob(a_fort)
         for i, l in enumerate(res["eco"]): 
             dist = torch.distributions.Categorical(logits=l)
             lp += dist.log_prob(a_eco[:, i])
@@ -308,7 +262,6 @@ def train_agent_lightning():
     soldier_model = sandbox.train()
     
     env = StrategyEnv()
-
     replay_buffer = ReplayBuffer(BUFFER_CAP, env.observation_space, env.action_space)
 
     model = StrategyLightningModule(env, replay_buffer, LR, COLLECT_STEPS, soldier_model, batch_size=BATCH_SIZE)
@@ -325,7 +278,6 @@ def train_agent_lightning():
 
     trainer.fit(model)
     torch.save(model.model.state_dict(), "marl_strategy_optimized.pth")
-
 
 if __name__ == "__main__":
     train_agent_lightning()

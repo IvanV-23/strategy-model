@@ -60,12 +60,14 @@ class StrategyEnv(gym.Env):
         self.diplomacy_action_space = spaces.Discrete(3)
         self.economy_action_space = spaces.MultiDiscrete([10, 3, 2, 3, 3, 2])
         self.target_action_space = spaces.Discrete(256)
+        self.soldier_target_action_space = spaces.Discrete(256) # NEW: Tactical Soldier Target
         self.fortify_target_action_space = spaces.Discrete(256) # NEW
         
         self.action_space = spaces.Dict({
             "diplomacy": self.diplomacy_action_space,
             "economy": self.economy_action_space,
             "target_tile": self.target_action_space,
+            "soldier_target_tile": self.soldier_target_action_space, # NEW
             "fortify_tile": self.fortify_target_action_space, # NEW
         })
 
@@ -123,6 +125,10 @@ class StrategyEnv(gym.Env):
         self.target_row = target_idx // 16
         self.target_col = target_idx % 16
 
+        soldier_target_idx = action["soldier_target_tile"] # NEW
+        self.soldier_target_row = soldier_target_idx // 16
+        self.soldier_target_col = soldier_target_idx % 16
+
         fort_target_idx = action["fortify_tile"]
         self.fort_target_row = fort_target_idx // 16
         self.fort_target_col = fort_target_idx % 16
@@ -136,6 +142,10 @@ class StrategyEnv(gym.Env):
         self.opponent_env.reset()
         self.board_env.reset()
         self.pending_fortify_tile = None # NEW
+        self.target_row = 0
+        self.target_col = 0
+        self.soldier_target_row = 0 # NEW
+        self.soldier_target_col = 0 # NEW
         self.history = ["Game Started"]
         self.shot_events = [] # NEW
         if self.render_mode == "human": self.render()
@@ -161,7 +171,7 @@ class StrategyEnv(gym.Env):
         if self.current_turn == 1: # Spawn initial soldiers for player 1
             self.board_env.spawn_soldiers(player_id=1, count=2)
         
-        terminated_soldiers, sol_defeated_workers, accuracy_info, damage_dealt = self.board_env.move_soldiers(soldier_agent, p1_goal, target_tile=(self.target_row, self.target_col))
+        terminated_soldiers, sol_defeated_workers, accuracy_info, damage_dealt = self.board_env.move_soldiers(soldier_agent, p1_goal, target_tile=(self.soldier_target_row, self.soldier_target_col))
         if terminated_soldiers: terminated = True
         self.defeated_workers += sol_defeated_workers
         self.damage_dealt_to_opponent = damage_dealt
@@ -256,7 +266,9 @@ class StrategyEnv(gym.Env):
             'o1_routes': [], 'o1_base': (15,15),
             'p_warehouses': self.board_env.p1_buildings_manager.get_building_count_by_type(1, 2) + self.board_env.p1_buildings_manager.get_building_count_by_type(1, 6),
             'p_crops': self.board_env.p1_buildings_manager.get_building_count_by_type(1, 5) + self.board_env.p1_buildings_manager.get_building_count_by_type(1, 7),
-            'shot_events': self.shot_events # NEW
+            'shot_events': self.shot_events,
+            'target_tile': [int(self.target_row), int(self.target_col)], # Expansion Intent
+            'soldier_target_tile': [int(self.soldier_target_row), int(self.soldier_target_col)] # NEW: Tactical Intent
         }
         return self.renderer.render_frame(self.render_mode, state)
 

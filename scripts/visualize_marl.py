@@ -67,6 +67,7 @@ def visualize_marl_agent():
                 "diplomacy": torch.argmax(res["dip"], dim=1).item(),
                 "economy": [torch.argmax(l, dim=1).item() for l in eco_l],
                 "target_tile": torch.argmax(res["mil"], dim=1).item(),
+                "soldier_target_tile": torch.argmax(res["mil_soldier"], dim=1).item(),
                 "fortify_tile": torch.argmax(res["mil_fortify"], dim=1).item()
             }
 

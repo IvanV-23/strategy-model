@@ -463,7 +463,37 @@ public:
         }
 
         // PASS 3: ANIMATIONS (Overlay)
-        if (state.contains("shot_events")) {
+        // 1. Expansion Target (Yellow)
+        if (state.contains("target_tile")) {
+            int tr = state["target_tile"][0];
+            int tc = state["target_tile"][1];
+            Point2D p = cam.project((float)tc + 0.5f, (float)tr + 0.5f, 5.0f);
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(renderer, 255, 255, 0, 80); // Yellow Glow
+            Graphics::fill_circle(renderer, p.x, p.y, (int)(12 * cam.zoom));
+            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 150);
+            SDL_RenderDrawLine(renderer, p.x - 8, p.y, p.x + 8, p.y);
+            SDL_RenderDrawLine(renderer, p.x, p.y - 8, p.x, p.y + 8);
+        }
+
+        // 2. Tactical Soldier Target (Red)
+        if (state.contains("soldier_target_tile")) {
+            int str = state["soldier_target_tile"][0];
+            int stc = state["soldier_target_tile"][1];
+            Point2D p = cam.project((float)stc + 0.5f, (float)str + 0.5f, 10.0f);
+            
+            // Pulse effect based on turn number
+            int turn = state.contains("turn") ? state["turn"].get<int>() : 0;
+            int pulse = (int)(sin(turn * 0.5f) * 5 + 15);
+
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(renderer, 255, 0, 0, 150); // Red Crosshair
+            Graphics::fill_circle(renderer, p.x, p.y, (int)(pulse * cam.zoom / 2));
+            
+            SDL_SetRenderDrawColor(renderer, 255, 50, 50, 255);
+            SDL_RenderDrawLine(renderer, p.x - 15, p.y, p.x + 15, p.y);
+            SDL_RenderDrawLine(renderer, p.x, p.y - 15, p.x, p.y + 15);
+        }
             for (const auto& shot : state["shot_events"]) {
                 if (shot.contains("from") && shot.contains("to")) {
                     Point2D p_from = cam.project(shot["from"][1].get<float>() + 0.5f, shot["from"][0].get<float>() + 0.5f, 20.0f);
