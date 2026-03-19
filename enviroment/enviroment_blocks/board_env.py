@@ -101,13 +101,35 @@ class BoardEnv:
                 grunt_goal[0, 1] = torch.tensor(dc_in, dtype=torch.float32, device=p1_goal.device)
                 grunt_goal[0, 2] = 0.0 # Move mode
                 
+                # DEBUG PRINT
+                if total_soldiers_p1 == 1:
+                    print(f"[DEBUG] Soldier at ({r},{c}) | Target: ({tr},{tc}) | Rel In: ({dr_in:.2f}, {dc_in:.2f})")
+                
                 # 4. Local view extraction
                 local_view = self._get_local_view(full_obs, r, c, size=5)
-                local_t = torch.from_numpy(local_view).float().unsqueeze(0).to(p1_goal.device)
+                # NORMALIZATION: The model was trained with randn (std 1). 
+                # Real board values are much higher (0-50).
+                local_view_norm = local_view.astype(np.float32) / 10.0
+                local_t = torch.from_numpy(local_view_norm).unsqueeze(0).to(p1_goal.device)
                 
                 with torch.no_grad():
                     logits = soldier_agent(local_t, grunt_goal)
                     action = torch.argmax(logits, dim=1).item()
+                
+                # DEBUG PRINT TACTICAL
+                if total_soldiers_p1 == 1:
+                    moves_names = ["STAY", "N", "S", "E", "W"]
+                    print(f"[DEBUG] Soldier at ({r},{c}) | Target: ({tr},{tc})")
+                    print(f"[DEBUG] Rel In: dr={dr_in:.2f}, dc={dc_in:.2f} | Mode: {grunt_goal[0,2].item()}")
+                    print(f"[DEBUG] Action: {moves_names[action]} | Vision Mean: {local_view_norm.mean():.2f}")
+                    # Visual local check
+                    lv = np.full((5,5), ".")
+                    lv[2,2] = "S"
+                    tr_l, tc_l = 2 + (tr-r), 2 + (tc-c)
+                    if 0<=tr_l<5 and 0<=tc_l<5: lv[tr_l, tc_l] = "T"
+                    print("Local View:")
+                    for row in lv: print(" ".join(row))
+
                 
                 # --- ANTI-STUCK JITTER ---
                 # If the model picks STAY but isn't at the target, 15% chance to force movement

@@ -349,6 +349,7 @@ def train_agent_lightning():
 
     trainer.fit(model)
     torch.save(model.model.state_dict(), "marl_strategy_optimized.pth")
+    torch.save(model.soldier_agent.state_dict(), "soldier_agent_trained.pth") # SAVE SOLDIER AGENT TOO
 
 if __name__ == "__main__":
     train_agent_lightning()

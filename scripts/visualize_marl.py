@@ -23,7 +23,7 @@ def visualize_marl_agent():
     # 3. Load Weights
     model_path = "marl_strategy_optimized.pth"
     if os.path.exists(model_path):
-        print(f"Loading weights from {model_path}")
+        print(f"Loading manager weights from {model_path}")
         state_dict = torch.load(model_path, weights_only=True, map_location="cpu")
         new_state_dict = {}
         for k, v in state_dict.items():
@@ -31,11 +31,16 @@ def visualize_marl_agent():
             else: new_state_dict[k] = v
         model.load_state_dict(new_state_dict, strict=True)
     
+    soldier_path = "soldier_agent_trained.pth"
+    if os.path.exists(soldier_path):
+        print(f"Loading soldier weights from {soldier_path}")
+        soldier_model.load_state_dict(torch.load(soldier_path, weights_only=True, map_location="cpu"))
+    
     model.eval()
     soldier_model.eval()
 
     obs, info = env.reset()
-    current_goal = None
+    current_goal = torch.zeros((1, 16))
     running = True
     
     use_cpp = os.getenv("USE_CPP_RENDER") == "1"
@@ -60,7 +65,14 @@ def visualize_marl_agent():
             
             # HRL: Update goal every 10 turns
             if env.current_turn % 10 == 0:
-                current_goal = res["goal"]
+                current_goal = res["goal"].clone()
+                # TACTICAL EXTRACTION:
+                s_idx = torch.argmax(res["mil_soldier"], dim=1).item()
+                tr, tc = s_idx // 16, s_idx % 16
+                current_goal[0, 0] = (tr / 16.0) * 2 - 1
+                current_goal[0, 1] = (tc / 16.0) * 2 - 1
+                is_enemy = obs["board_state"][0, tr, tc] == 2
+                current_goal[0, 2] = 1.0 if is_enemy else 0.0
 
             eco_l = res["eco"]
             action = {
