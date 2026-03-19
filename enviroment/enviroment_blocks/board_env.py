@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import math
 
 from enviroment.enviroment_blocks.board_blocks.trade_route_manager_env import TradeRouteManager
 from enviroment.enviroment_blocks.board_blocks.buildings_manager_env import BuildingsManager
@@ -12,6 +13,7 @@ class BoardEnv:
         self.grid = np.zeros((rows, cols, 7), dtype=np.int32)
         self.p1_trade_manager = TradeRouteManager(base_coords=(0, 0))
         self.p1_buildings_manager = BuildingsManager(self.grid, rows, cols)
+        self.lost_soldiers_combat = 0
 
     def reset(self):
         resource_layer = self.grid[:, :, 3].copy() 
@@ -23,6 +25,7 @@ class BoardEnv:
         self.grid[self.rows-1, self.cols-1, 6] = 2 # Default Fortification Level 2
         if np.sum(resource_layer) == 0: self._generate_resources()
         self.p1_trade_manager.active_routes = []
+        self.lost_soldiers_combat = 0
         return self.grid
 
     def update_board(self):
@@ -33,116 +36,163 @@ class BoardEnv:
         channel = 4 if player_id == 1 else 5
         self.grid[base_coords[0], base_coords[1], channel] += count
 
+    def debug_soldier_brain(self, r, c, tr, tc, dr_rel, dc_rel, action):
+        """Prints a tactical snapshot of why a soldier chose an action."""
+        print("\n--- BRAIN SNAPSHOT ---")
+        print(f"Position: ({r}, {c}) | Target: ({tr}, {tc})")
+        print(f"Relative Input: dr={dr_rel:.3f}, dc={dc_rel:.3f}")
+        
+        # Map the action back to a direction name
+        action_names = ["STAY", "NORTH", "SOUTH", "EAST", "WEST"]
+        print(f"Model Decision: {action_names[action]}")
+        
+        # Visual check: Is the target physically where we think it is?
+        grid_view = np.full((5, 5), ".")
+        grid_view[2, 2] = "S"  # Soldier in center
+        
+        # Calculate target position relative to local view
+        tr_local, tc_local = 2 + (tr - r), 2 + (tc - c)
+        if 0 <= tr_local < 5 and 0 <= tc_local < 5:
+            grid_view[tr_local, tc_local] = "T"
+        
+        print("Local Layout (S=Soldier, T=Target):")
+        for row in grid_view:
+            print(" ".join(row))
+        print("----------------------")
+
     def move_soldiers(self, soldier_agent=None, p1_goal=None, target_tile=None):
         """
         Moves soldiers. 
-        If soldier_agent and p1_goal are provided, P1 uses the HRL model.
-        target_tile: (row, col) coordinates of the strategic target.
+        P1 uses the Tactical Agent with relative goal injection and double buffering.
+        P2 uses random movement.
         """
         game_terminated = False
         defeated_workers = 0
-        damage_dealt = 0.0
-        self.lost_soldiers_combat = 0
-        moved_closer = 0
-        total_moves = 0
+        closer_count = 0
+        total_soldiers_p1 = 0
+
         p1_base, p2_base = (0, 0), (self.rows - 1, self.cols - 1)
-        
-        # --- 1. PREPARE NEXT STATES ---
+        full_obs = self.full_board_state() 
+
+        # --- 1. PROCESS P1 SOLDIERS ---
         next_p1 = np.zeros((self.rows, self.cols), dtype=np.int32)
-        next_p2 = np.zeros((self.rows, self.cols), dtype=np.int32)
-        
-        # --- 2. PROCESS P1 SOLDIERS (Tactical Agent) ---
         p1_indices = np.argwhere(self.grid[:, :, 4] > 0)
-        full_obs = self.full_board_state()
         
         for r, c in p1_indices:
             count = self.grid[r, c, 4]
-            nr, nc = r, c
+            total_soldiers_p1 += 1
+            nr, nc = r, c 
             
-            if soldier_agent is not None and p1_goal is not None:
-                total_moves += 1
-                current_p1_goal = p1_goal.clone()
-                if target_tile is not None:
-                    tr, tc = target_tile
-                    current_p1_goal[0, 0] = float(tr - r) / 20.0
-                    current_p1_goal[0, 1] = float(tc - c) / 20.0
-
+            if soldier_agent is not None and p1_goal is not None and target_tile is not None:
+                tr, tc = target_tile
+                
+                # 1. Calculate RAW relative direction
+                dr_raw = float(tr - r)
+                dc_raw = float(tc - c)
+                
+                # 2. SIGNAL BOOST: Use tanh to ensure the agent feels 'pressure' 
+                # even at small distances (1-2 tiles).
+                dr_in = math.tanh(dr_raw) 
+                dc_in = math.tanh(dc_raw)
+                
+                # 3. Inject into goal vector
+                grunt_goal = p1_goal.clone()
+                grunt_goal[0, 0] = torch.tensor(dr_in, dtype=torch.float32, device=p1_goal.device)
+                grunt_goal[0, 1] = torch.tensor(dc_in, dtype=torch.float32, device=p1_goal.device)
+                grunt_goal[0, 2] = 0.0 # Move mode
+                
+                # 4. Local view extraction
                 local_view = self._get_local_view(full_obs, r, c, size=5)
                 local_t = torch.from_numpy(local_view).float().unsqueeze(0).to(p1_goal.device)
+                
                 with torch.no_grad():
-                    logits = soldier_agent(local_t, current_p1_goal)
+                    logits = soldier_agent(local_t, grunt_goal)
                     action = torch.argmax(logits, dim=1).item()
+                
+                # --- ANTI-STUCK JITTER ---
+                # If the model picks STAY but isn't at the target, 15% chance to force movement
+                dist_to_target = abs(dr_raw) + abs(dc_raw)
+                if action == 0 and dist_to_target > 0.5:
+                    if np.random.rand() < 0.15:
+                        action = np.random.randint(1, 5)
+
                 moves = [(0,0), (-1,0), (1,0), (0,1), (0,-1)]
                 dr, dc = moves[action]
-                if 0 <= r+dr < self.rows and 0 <= c+dc < self.cols:
-                    nr, nc = r+dr, c+dc
                 
-                if target_tile is not None:
-                    tr, tc = target_tile
-                    if (abs(tr - nr) + abs(tc - nc)) < (abs(tr - r) + abs(tc - c)):
-                        moved_closer += 1
-            else:
-                neighbors = self._get_neighbors(r, c)
-                if neighbors: nr, nc = neighbors[np.random.randint(len(neighbors))]
+                # 5. Boundary Check
+                if 0 <= r + dr < self.rows and 0 <= c + dc < self.cols:
+                    nr, nc = r + dr, c + dc
+                    if (abs(tr - nr) + abs(tc - nc)) < dist_to_target:
+                        closer_count += 1
+                else:
+                    nr, nc = r, c # Stay put if move is invalid
 
-            # Resolve combat for P1 at destination
-            if self.grid[nr, nc, 0] == 2: # Enemy Tile
+            # --- P1 COMBAT RESOLUTION ---
+            target_owner = self.grid[nr, nc, 0]
+            if target_owner == 2: # Enemy tile
                 attack = count * 200
-                defense = self.grid[nr, nc, 2] + (20 if self.grid[nr, nc, 1] > 0 else 0) + (self.grid[nr, nc, 5] * 200) + 100 + (100 if self.grid[nr, nc, 6] == 1 else 0)
+                defense = self.grid[nr, nc, 2] + (self.grid[nr, nc, 5] * 200) + 100
                 if attack > defense:
                     if (nr, nc) == p2_base: game_terminated = True
                     defeated_workers += int(self.grid[nr, nc, 2])
-                    damage_dealt += (self.grid[nr, nc, 5] * 200.0)
-                    if self.grid[nr, nc, 1] > 0: damage_dealt += 100.0
-                    self.grid[nr, nc, 0] = 0; self.grid[nr, nc, 1] = 0; self.grid[nr, nc, 2] = 0
-                    self.grid[nr, nc, 5] = 0; self.grid[nr, nc, 6] = 0
+                    self.grid[nr, nc, 0:3] = 0 
+                    self.grid[nr, nc, 5:7] = 0 
                     next_p1[nr, nc] += count
+                else:
+                    next_p1[r, c] += count # Failed attack, bounce back
             else:
-                p2_count = self.grid[nr, nc, 5]
-                if p2_count > 0:
-                    if count * 200 > p2_count * 200:
-                        damage_dealt += (p2_count * 200.0)
-                        self.grid[nr, nc, 5] = 0; next_p1[nr, nc] += count
+                if self.grid[nr, nc, 5] > 0: # Enemy soldiers present
+                    if count > self.grid[nr, nc, 5]:
+                        self.grid[nr, nc, 5] = 0
+                        next_p1[nr, nc] += count
+                    # Else: soldier dies (not added to next_p1)
                 else:
                     next_p1[nr, nc] += count
 
-        # --- 3. PROCESS P2 SOLDIERS (Random Movement) ---
+        # --- 2. PROCESS P2 SOLDIERS ---
+        next_p2 = np.zeros((self.rows, self.cols), dtype=np.int32)
         p2_indices = np.argwhere(self.grid[:, :, 5] > 0)
         for r, c in p2_indices:
             count = self.grid[r, c, 5]
-            neighbors = self._get_neighbors(r, c)
-            nr, nc = r, c
-            if neighbors: nr, nc = neighbors[np.random.randint(len(neighbors))]
+            possible_moves = self._get_neighbors(r, c) + [(r, c)]
+            nr, nc = possible_moves[np.random.randint(len(possible_moves))]
             
-            if self.grid[nr, nc, 0] == 1: # P1 Tile
+            if self.grid[nr, nc, 0] == 1: # P2 attacking P1
                 attack = count * 200
-                defense = self.grid[nr, nc, 2] + (20 if self.grid[nr, nc, 1] > 0 else 0) + (next_p1[nr, nc] * 200) + 100 + (100 if self.grid[nr, nc, 6] == 1 else 0)
+                defense = self.grid[nr, nc, 2] + (next_p1[nr, nc] * 200) + 100
                 if attack > defense:
                     if (nr, nc) == p1_base: game_terminated = True
-                    self.lost_soldiers_combat += int(next_p1[nr, nc])
-                    self.grid[nr, nc, 0] = 0; self.grid[nr, nc, 1] = 0; self.grid[nr, nc, 2] = 0
-                    self.grid[nr, nc, 6] = 0; next_p1[nr, nc] = 0
+                    self.grid[nr, nc, 0:3] = 0
+                    self.grid[nr, nc, 6] = 0 
+                    next_p1[nr, nc] = 0
                     next_p2[nr, nc] += count
             else:
-                p1_count = next_p1[nr, nc]
-                if p1_count > 0:
-                    if count * 200 > p1_count * 200:
-                        self.lost_soldiers_combat += int(next_p1[nr, nc])
-                        next_p1[nr, nc] = 0; next_p2[nr, nc] += count
-                    else:
-                        pass # P2 soldier dies, next_p1 stays
+                if next_p1[nr, nc] > 0:
+                    if count > next_p1[nr, nc]:
+                        next_p1[nr, nc] = 0
+                        next_p2[nr, nc] += count
                 else:
                     next_p2[nr, nc] += count
 
-        # --- 4. FINALIZE GRID ---
+        # Final Grid Sync
         self.grid[:, :, 4] = next_p1
         self.grid[:, :, 5] = next_p2
-        return game_terminated, defeated_workers, (moved_closer, total_moves), damage_dealt
+        
+        accuracy_info = (closer_count, total_soldiers_p1)
+        return game_terminated, defeated_workers, accuracy_info, 0
 
     def _get_local_view(self, full_obs, r, c, size=5):
-        pad = size // 2
-        padded = np.pad(full_obs, ((0,0), (pad,pad), (pad,pad)), mode='constant')
-        return padded[:, r:r+size, c:c+size]
+            """
+            Corrected local view: Slices from the padded array 
+            using the offset created by the padding.
+            """
+            pad = size // 2
+            # Pad the spatial dimensions (H, W), not the channels
+            padded = np.pad(full_obs, ((0,0), (pad,pad), (pad,pad)), mode='constant')
+            
+            # In the padded array, the original (r, c) is now at (r+pad, c+pad)
+            # We want to slice from (r) to (r + size)
+            return padded[:, r : r + size, c : c + size]
 
     def grow_workers(self, p1_food_gen=None):
         WORKER_LIMIT, BASE_LIMIT = 50, 500

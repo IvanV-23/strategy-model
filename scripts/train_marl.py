@@ -21,38 +21,72 @@ class SoldierSandbox:
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
 
     def train(self, steps=5000):
-        print("Training Tactical SoldierAgent in sandbox...")
-        for i in range(steps):
-            # Synthetic local view (5x5x8) and goal
-            local_view = torch.randn(32, 8, 5, 5)
-            goal = torch.randn(32, 16)
+            print("Training Tactical SoldierAgent in sandbox...")
+            self.model.train() # Set to training mode
             
-            # Slot 2: Aggression Mode (randomly on/off)
-            goal[:, 2] = (torch.rand(32) > 0.5).float()
+            for i in range(steps):
+                # 1. Generate Synthetic Inputs
+                # local_view: (Batch, Channels, Height, Width)
+                local_view = torch.randn(32, 8, 5, 5) 
+                
+                # goal: (Batch, 16)
+                # We initialize with zeros so the model learns that empty slots = neutral
+                goal = torch.zeros(32, 16) 
 
-            # Hybrid Goal: First 2 slots are relative (dr, dc)
-            target = []
-            for b in range(32):
-                dr, dc = goal[b, 0].item(), goal[b, 1].item()
-                if abs(dr) > abs(dc):
-                    action = 2 if dr > 0 else 1 # South if dr > 0, else North
-                elif abs(dc) > 0:
-                    action = 3 if dc > 0 else 4 # East if dc > 0, else West
-                else:
-                    action = 0 # Stay
-                target.append(action)
-            
-            target = torch.tensor(target)
-            logits = self.model(local_view, goal)
-            loss = F.cross_entropy(logits, target)
-            
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-            
-            if i % 1000 == 0:
-                print(f"Sandbox Step {i}, Loss: {loss.item():.4f}")
-        return self.model
+                # 2. Assign Strategic Intent to specific Goal Slots
+                # Slot 0: Vertical distance (dr) -> [-1.0 to 1.0]
+                # Slot 1: Horizontal distance (dc) -> [-1.0 to 1.0]
+                dr = (torch.rand(32) * 2 - 1) 
+                dc = (torch.rand(32) * 2 - 1)
+                
+                goal[:, 0] = dr
+                goal[:, 1] = dc
+                
+                # Slot 2: Aggression/Combat Mode (Binary 0 or 1)
+                # This helps the model distinguish between "Move to target" and "Engage target"
+                goal[:, 2] = (torch.rand(32) > 0.5).float()
+
+                # 3. Create Ground Truth Labels (Teacher Forcing)
+                # We calculate which action (Stay, N, S, E, W) gets the soldier closer to (dr, dc)
+                target_actions = []
+                for b in range(32):
+                    v_dist = dr[b].item()
+                    h_dist = dc[b].item()
+                    
+                    # Simple logic: prioritize the axis with the largest distance
+                    if abs(v_dist) < 0.1 and abs(h_dist) < 0.1:
+                        action = 0 # Stay (Already at target)
+                    elif abs(v_dist) > abs(h_dist):
+                        action = 2 if v_dist > 0 else 1 # 2: South, 1: North
+                    else:
+                        action = 3 if h_dist > 0 else 4 # 3: East, 4: West
+                    target_actions.append(action)
+                
+                # Move data to the correct device (GPU/CPU)
+                target_tensor = torch.tensor(target_actions, device=self.model.device if hasattr(self.model, 'device') else 'cpu')
+                local_view = local_view.to(target_tensor.device)
+                goal = goal.to(target_tensor.device)
+
+                # 4. Standard Optimization Loop
+                logits = self.model(local_view, goal)
+                loss = F.cross_entropy(logits, target_tensor)
+                
+                self.optimizer.zero_grad()
+                loss.backward()
+                
+                # Optional: Add gradient clipping to prevent the "exploding gradients" in MARL
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
+                
+                self.optimizer.step()
+                
+                # 5. Logging
+                if i % 1000 == 0:
+                    # Calculate accuracy for this batch
+                    acc = (logits.argmax(dim=1) == target_tensor).float().mean()
+                    print(f"Sandbox Step {i:4d} | Loss: {loss.item():.4f} | Accuracy: {acc:.2%}")
+
+            print("Tactical pre-training complete. SoldierAgent is now target-aware.")
+            return self.model
 
 class RLDataset(IterableDataset):
     def __init__(self, buffer: ReplayBuffer, batch_size: int):
@@ -131,47 +165,84 @@ class StrategyLightningModule(pl.LightningModule):
         return boards, stats, t_mask, b_mask, f_mask
 
     def on_train_epoch_start(self):
-        trajectory_data = []
-        start_idx = self.buffer.idx
-        for _ in range(self.collect_steps):
-            board_t, stats_t, t_mask, b_mask, f_mask = self._process_obs(self.obs, self.info)
-            with torch.no_grad():
-                res = self.model(board_t, stats_t, target_mask=t_mask, build_mask=b_mask, fortify_target_mask=f_mask)
+            trajectory_data = []
+            start_idx = self.buffer.idx
+            self.model.train()
+            self.soldier_agent.train()
+
+            for _ in range(self.collect_steps):
+                # 1. Get current observations from the environment
+                board_t, stats_t, t_mask, b_mask, f_mask = self._process_obs(self.obs, self.info)
+                
+                with torch.no_grad():
+                    # 2. Military/Economic models decide the high-level strategy
+                    res = self.model(board_t, stats_t, target_mask=t_mask, build_mask=b_mask, fortify_target_mask=f_mask)
+                
+                # 3. Sample actions from the logits
+                action = {
+                    "diplomacy": torch.distributions.Categorical(logits=res["dip"]).sample().item(),
+                    "economy": [torch.distributions.Categorical(logits=l).sample().item() for l in res["eco"]],
+                    "target_tile": torch.distributions.Categorical(logits=res["mil"]).sample().item(),
+                    "soldier_target_tile": torch.distributions.Categorical(logits=res["mil_soldier"]).sample().item(),
+                    "fortify_tile": torch.distributions.Categorical(logits=res["mil_fortify"]).sample().item()
+                }
+
+                # 4. Update Strategic Goal (The "Telephone Line" to the Soldiers)
+                # We only update this every few turns (goal_persistence) to give soldiers time to arrive
+                if self.env.current_turn % self.goal_persistence == 0:
+                    # Get the latent goal vector from the model
+                    self.current_goal = res["goal"].clone() 
+                    
+                    # Extract the target coordinates from the action chosen above
+                    target_idx = action["soldier_target_tile"]
+                    tr, tc = target_idx // 16, target_idx % 16
+                    
+                    # NORMALIZE: Map [0-15] grid to [-1.0, 1.0] for the Neural Network
+                    # This matches exactly what the SoldierAgent learned in the Sandbox
+                    self.current_goal[0, 0] = (tr / 16.0) * 2 - 1  # Target Row
+                    self.current_goal[0, 1] = (tc / 16.0) * 2 - 1  # Target Column
+                    
+                    # Identify if the target is an enemy to set aggression mode
+                    # obs["board_state"] channel 0 usually contains team IDs (1=Player, 2=Enemy)
+                    is_enemy = self.obs["board_state"][0, tr, tc] == 2
+                    self.current_goal[0, 2] = 1.0 if is_enemy else 0.0
+
+                # 5. Execute step: The SoldierAgent inside env.step() now sees the updated goal
+                next_obs, reward, terminated, truncated, next_info = self.env.step(
+                    action, 
+                    self.soldier_agent, 
+                    self.current_goal
+                )
+                
+                # 6. Reward Shaping: Encourage tactical alignment
+                if "soldier_accuracy" in next_info:
+                    closer, total = next_info["soldier_accuracy"]
+                    if total > 0:
+                        accuracy = closer / total
+                        self.log("tactical/soldier_accuracy", accuracy, prog_bar=True)
+                        # Add a "Progress Reward" so they learn to walk toward the red dot
+                        reward += accuracy * 0.5 
+
+                # 7. Store data for training
+                self.total_reward += reward
+                trajectory_data.append({
+                    'reward': reward, 
+                    'value': res["value"].item(), 
+                    'done': terminated or truncated
+                })
+                
+                self.buffer.add(self.obs, action, reward, next_obs, terminated, truncated, self.info)
+                
+                # 8. Cycle observations
+                self.obs, self.info = next_obs, next_info
+                
+                if terminated or truncated:
+                    self.log("episode/total_reward", self.total_reward, prog_bar=True)
+                    self.total_reward = 0
+                    self.obs, self.info = self.env.reset()
             
-            action = {
-                "diplomacy": torch.distributions.Categorical(logits=res["dip"]).sample().item(),
-                "economy": [torch.distributions.Categorical(logits=l).sample().item() for l in res["eco"]],
-                "target_tile": torch.distributions.Categorical(logits=res["mil"]).sample().item(),
-                "soldier_target_tile": torch.distributions.Categorical(logits=res["mil_soldier"]).sample().item(),
-                "fortify_tile": torch.distributions.Categorical(logits=res["mil_fortify"]).sample().item()
-            }
-
-            # Aggression Mode: If soldier target is an ENEMY, slot 2 = 1.0
-            if self.env.current_turn % self.goal_persistence == 0:
-                target_idx = action["soldier_target_tile"]
-                tr, tc = target_idx // 16, target_idx % 16
-                is_enemy = self.obs["board_state"][0, tr, tc] == 2
-                self.current_goal = res["goal"].clone()
-                self.current_goal[0, 2] = 1.0 if is_enemy else 0.0
-
-            next_obs, reward, terminated, truncated, next_info = self.env.step(action, self.soldier_agent, self.current_goal)
-            
-            if "soldier_accuracy" in next_info:
-                closer, total = next_info["soldier_accuracy"]
-                if total > 0:
-                    self.log("tactical/soldier_accuracy", closer / total, prog_bar=True)
-                    # Strategic Alignment Reward: Bonus for moving closer to target
-                    reward += (closer / total) * 0.5
-
-            self.total_reward += reward
-            trajectory_data.append({'reward': reward, 'value': res["value"].item(), 'done': terminated or truncated})
-            self.buffer.add(self.obs, action, reward, next_obs, terminated, truncated, self.info)
-            self.obs, self.info = next_obs, next_info
-            if terminated or truncated:
-                self.log("episode/total_reward", self.total_reward, prog_bar=True); self.total_reward = 0
-                self.obs, self.info = self.env.reset()
-        
-        self._compute_gae(trajectory_data, self.obs, self.info, start_idx)
+            # 9. Compute Generalized Advantage Estimation (GAE) for the batch
+            self._compute_gae(trajectory_data, self.obs, self.info, start_idx)
 
     def _compute_gae(self, trajectory, last_obs, last_info, start_idx):
         rewards = np.array([e['reward'] for e in trajectory]) * 0.1

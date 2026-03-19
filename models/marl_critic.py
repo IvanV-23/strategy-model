@@ -3,31 +3,35 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class SoldierAgent(nn.Module):
-    """
-    Tactical Level: Controls individual soldier movement.
-    Input: Local 5x5x8 board view + 16-dim goal vector.
-    Action: [Stay, North, South, East, West]
-    """
     def __init__(self, in_channels=8, goal_dim=16):
         super().__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels, 16, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Flatten()
+            nn.Flatten() # Result: 16 * 5 * 5 = 400
         )
+        
+        # We explicitly separate the 'spatial goal' from the 'latent goal'
         self.fc = nn.Sequential(
-            nn.Linear(400 + goal_dim, 64),
+            # 400 (vision) + 2 (relative dx, dy) + 14 (remaining latent goal)
+            nn.Linear(400 + goal_dim, 128), 
+            nn.ReLU(),
+            nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, 5) # [Stay, N, S, E, W]
         )
 
     def forward(self, local_view, goal_vector):
+        # 1. Process what the soldier sees locally
         x = self.conv(local_view)
-        # Ensure goal_vector is matched to batch size
+        
+        # 2. Ensure goal_vector matches batch size
         if goal_vector.size(0) == 1 and x.size(0) > 1:
             goal_vector = goal_vector.expand(x.size(0), -1)
-        x = torch.cat([x, goal_vector], dim=1)
-        return self.fc(x)
+            
+        # 3. Concatenate and predict
+        combined = torch.cat([x, goal_vector], dim=1)
+        return self.fc(combined)
 
 class DynamicBackbone(nn.Module):
     def __init__(self, in_channels=8, out_features=64):
@@ -60,12 +64,12 @@ class EconomicAgent(nn.Module):
         x = self.common(x)
         return self.workers_head(x), self.mines_head(x), self.trade_head(x), \
                self.warehouse_head(x), self.crop_head(x), self.fortify_head(x)
-
+1
 class MilitaryAgent(nn.Module):
     def __init__(self, spatial_channels, context_dim, goal_dim=16):
         super().__init__()
         self.target_head = nn.Conv2d(spatial_channels, 1, kernel_size=1)
-        self.soldier_target_head = nn.Conv2d(spatial_channels, 1, kernel_size=1) # NEW
+        self.soldier_target_head = nn.Conv2d(spatial_channels, 1, kernel_size=1) 
         self.fortify_target_head = nn.Conv2d(spatial_channels, 1, kernel_size=1)
         self.manager_head = nn.Sequential(
             nn.Linear(context_dim, 64),
@@ -76,7 +80,7 @@ class MilitaryAgent(nn.Module):
 
     def forward(self, spatial_features, common_features):
         target_logits = self.target_head(spatial_features)
-        soldier_target_logits = self.soldier_target_head(spatial_features) # NEW
+        soldier_target_logits = self.soldier_target_head(spatial_features) 
         fortify_logits = self.fortify_target_head(spatial_features)
         goal_vector = self.manager_head(common_features)
         return target_logits.view(target_logits.size(0), -1), \

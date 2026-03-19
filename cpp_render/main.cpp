@@ -157,12 +157,13 @@ namespace Graphics {
 // --- Entity Classes ---
 class BaseRenderer {
 public:
-    virtual void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) = 0;
+    virtual void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) = 0;
 };
 
 class TileRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
+        const auto& tile = board[r][c];
         int owner = tile["owner"];
         SDL_Color col = {40, 40, 45, 255};
         if (owner == 1) col = {30, 60, 120, 255};
@@ -174,7 +175,8 @@ public:
 
 class BuildingRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
+        const auto& tile = board[r][c];
         int status = tile["status"];
         if (status == 0 || status == 1 || status == 4 || status == 5 || status == 7 || status == 2 || status == 6) return; 
 
@@ -186,21 +188,20 @@ public:
             height = 0.8f;
         }
 
-        // Fixed: Added Graphics:: prefix
         Graphics::draw_iso_box(renderer, cam, (float)c + 0.2f, (float)r + 0.2f, 0.6f, 0.6f, height * cam.tileW, col);
     }
 };
 
 class WarehouseRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
+        const auto& tile = board[r][c];
         int status = tile["status"];
         if (status != 2 && status != 6) return; 
 
         SDL_Color beige = {210, 180, 140, 255};
         SDL_Color slate = {60, 60, 70, 255};
         
-        // This uses the new specialized function I added to your Graphics namespace
         Graphics::draw_complete_building(
             renderer, cam, 
             (float)c + 0.2f, (float)r + 0.2f, 
@@ -209,7 +210,6 @@ public:
             beige, slate
         );
 
-        // Fixed: Added Graphics:: prefix for the crate
         SDL_Color crateCol = {139, 69, 19, 255};
         Graphics::draw_iso_box(renderer, cam, (float)c + 0.8f, (float)r + 0.2f, 0.15f, 0.15f, 0.1f * cam.tileW, crateCol, 0.0f);
     }
@@ -217,18 +217,16 @@ public:
 
 class CropRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
+        const auto& tile = board[r][c];
         int status = tile["status"];
-        if (status != 5 && status != 7) return; // Only render for crop statuses
+        if (status != 5 && status != 7) return; 
 
-        float z = cam.zoom;
-        SDL_Color soilCol = {101, 67, 33, 255}; // Dark Earth
-        SDL_Color plantCol = {100, 200, 50, 255}; // Bright Crop Green
+        SDL_Color soilCol = {101, 67, 33, 255}; 
+        SDL_Color plantCol = {100, 200, 50, 255}; 
 
-        // 1. Draw the Tilled Soil Base
         Graphics::draw_iso_box(renderer, cam, (float)c + 0.1f, (float)r + 0.1f, 0.8f, 0.8f, 0.05f * cam.tileW, soilCol);
 
-        // 2. Draw the Furrows (Rows) and Tufts
         for (float row_off = 0.25f; row_off <= 0.75f; row_off += 0.25f) {
             for (float col_off = 0.2f; col_off <= 0.8f; col_off += 0.2f) {
                 Graphics::draw_iso_box(renderer, cam, 
@@ -245,23 +243,21 @@ public:
 
 class SawmillRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
+        const auto& tile = board[r][c];
         int status = tile["status"];
         if (status != 1 && status != 4) return; 
 
         Point2D p = cam.project(c + 0.5f, r + 0.5f);
         float z = cam.zoom;
 
-        // --- 2. THE MAIN CABIN (Brown Cube) ---
-        SDL_Color buildingCol = {139, 69, 19, 255}; // Saddle Brown
+        SDL_Color buildingCol = {139, 69, 19, 255}; 
         float cabinHeight = 0.6f * cam.tileW;
         Graphics::draw_iso_box(renderer, cam, (float)c + 0.2f, (float)r + 0.2f, 0.3f, 0.3f, cabinHeight, buildingCol);
 
-        // --- 3. THE SLANTED ROOF (Slate Grey) ---
         SDL_Color roofCol = {80, 80, 90, 255};
         Graphics::draw_iso_box(renderer, cam, (float)c + 0.15f, (float)r + 0.15f, 0.7f, 0.7f, 0.1f * cam.tileW, roofCol, cabinHeight); 
 
-        // --- 4. THE LOG PILE ---
         SDL_Color logCol = {101, 67, 33, 255};
         for(int i = 0; i < 3; ++i) {
             SDL_Rect log = { p.x + (int)(10*z), p.y - (int)((5 + i*4)*z), (int)(15*z), (int)(3*z) };
@@ -273,41 +269,31 @@ public:
 
 class TreeRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
+        const auto& tile = board[r][c];
         if (!tile.contains("wood") || tile["wood"].get<int>() <= 0) return;
 
-        // Don't draw a tree if there's a sawmill (status 1 or 4) on this tile
         int status = tile["status"];
         if (status == 1 || status == 4) return;
 
-        // Use the camera projection to stay locked to the grid
         Point2D p = cam.project(c + 0.5f, r + 0.5f);
         float z = cam.zoom;
 
-        // 1. Drop Shadow (Grounded)
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 60); 
         Graphics::fill_circle(renderer, p.x, p.y, (int)(10 * z));
 
-        // 2. Trunk (Brown Log) - Scaled by Zoom
         SDL_SetRenderDrawColor(renderer, 101, 67, 33, 255);
         int trunkW = (int)(6 * z);
         int trunkH = (int)(25 * z);
         SDL_Rect trunk = { p.x - trunkW / 2, p.y - trunkH, trunkW, trunkH };
         SDL_RenderFillRect(renderer, &trunk);
 
-        // 3. Rounded Crown (3 Layers for "3D" depth) - Scaled by Zoom
         int crownY = p.y - (int)(35 * z);
-        
-        // Bottom layer
         SDL_SetRenderDrawColor(renderer, 20, 100, 20, 255);
         Graphics::fill_circle(renderer, p.x, crownY, (int)(18 * z));
-        
-        // Middle layer
         SDL_SetRenderDrawColor(renderer, 34, 139, 34, 255);
         Graphics::fill_circle(renderer, p.x, crownY - (int)(4 * z), (int)(14 * z));
-        
-        // Top highlight
         SDL_SetRenderDrawColor(renderer, 60, 200, 60, 255);
         Graphics::fill_circle(renderer, p.x - (int)(3 * z), crownY - (int)(7 * z), (int)(7 * z));
     }
@@ -315,34 +301,90 @@ public:
 
 class WallRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
+        const auto& tile = board[r][c];
         if (!tile.contains("fortified")) return;
         int f_lvl = tile["fortified"];
         if (f_lvl <= 0) return;
 
-        SDL_Color wallCol = (f_lvl == 1) ? SDL_Color{160, 120, 60, 255} : SDL_Color{140, 140, 150, 255};
-        float wallH = (f_lvl == 1) ? 0.2f : 0.4f;
-        float wallT = (f_lvl == 1) ? 0.1f : 0.15f; // Thickness
+        int rows = board.size();
+        int cols = board[0].size();
+        int owner = tile["owner"];
 
-        // North Wall
-        Graphics::draw_iso_box(renderer, cam, (float)c, (float)r, 1.0f, wallT, wallH * cam.tileW, wallCol);
-        // West Wall
-        Graphics::draw_iso_box(renderer, cam, (float)c, (float)r, wallT, 1.0f, wallH * cam.tileW, wallCol);
-        // South Wall
-        Graphics::draw_iso_box(renderer, cam, (float)c, (float)r + 1.0f - wallT, 1.0f, wallT, wallH * cam.tileW, wallCol);
-        // East Wall
-        Graphics::draw_iso_box(renderer, cam, (float)c + 1.0f - wallT, (float)r, wallT, 1.0f, wallH * cam.tileW, wallCol);
+        // Find closest enemy tiles
+        float min_dist = 1e9f;
+        std::vector<std::pair<int, int>> enemies;
+
+        for (int er = 0; er < rows; ++er) {
+            for (int ec = 0; ec < cols; ++ec) {
+                int e_owner = board[er][ec]["owner"];
+                if (e_owner != 0 && e_owner != owner) {
+                    float d = std::sqrt(std::pow(er - r, 2) + std::pow(ec - c, 2));
+                    if (d < min_dist - 0.001f) {
+                        min_dist = d;
+                        enemies.clear();
+                        enemies.push_back({er, ec});
+                    } else if (std::abs(d - min_dist) < 0.001f) {
+                        enemies.push_back({er, ec});
+                    }
+                }
+            }
+        }
+
+        bool draw_n = false, draw_s = false, draw_w = false, draw_e = false;
+
+        if (enemies.empty()) {
+            draw_n = draw_s = draw_w = draw_e = true; // All borders if no enemy found
+        } else {
+            float min_border_dist = 1e9f;
+            float dists[4]; // N, S, W, E
+            float bx[4] = {(float)c + 0.5f, (float)c + 0.5f, (float)c, (float)c + 1.0f};
+            float by[4] = {(float)r, (float)r + 1.0f, (float)r + 0.5f, (float)r + 0.5f};
+
+            for (int i = 0; i < 4; ++i) {
+                dists[i] = 1e9f;
+                for (auto& e : enemies) {
+                    float d = std::sqrt(std::pow(bx[i] - (e.second + 0.5f), 2) + std::pow(by[i] - (e.first + 0.5f), 2));
+                    if (d < dists[i]) dists[i] = d;
+                }
+                if (dists[i] < min_border_dist - 0.001f) min_border_dist = dists[i];
+            }
+
+            if (std::abs(dists[0] - min_border_dist) < 0.001f) draw_n = true;
+            if (std::abs(dists[1] - min_border_dist) < 0.001f) draw_s = true;
+            if (std::abs(dists[2] - min_border_dist) < 0.001f) draw_w = true;
+            if (std::abs(dists[3] - min_border_dist) < 0.001f) draw_e = true;
+        }
+
+        SDL_Color wallCol = (f_lvl == 1) ? SDL_Color{160, 120, 60, 255} : SDL_Color{140, 140, 150, 255};
+        float wallH = (f_lvl == 1) ? 0.25f : 0.45f;
+        float wallT = (f_lvl == 1) ? 0.12f : 0.18f;
+
+        auto draw_pillar = [&](float px, float py) {
+            Graphics::draw_iso_box(renderer, cam, px - wallT*0.8f, py - wallT*0.8f, wallT * 1.6f, wallT * 1.6f, (wallH + 0.1f) * cam.tileW, wallCol);
+        };
+
+        // Draw the wall segments
+        if (draw_n) Graphics::draw_iso_box(renderer, cam, (float)c, (float)r, 1.0f, wallT, wallH * cam.tileW, wallCol);
+        if (draw_w) Graphics::draw_iso_box(renderer, cam, (float)c, (float)r, wallT, 1.0f, wallH * cam.tileW, wallCol);
+        if (draw_s) Graphics::draw_iso_box(renderer, cam, (float)c, (float)r + 1.0f - wallT, 1.0f, wallT, wallH * cam.tileW, wallCol);
+        if (draw_e) Graphics::draw_iso_box(renderer, cam, (float)c + 1.0f - wallT, (float)r, wallT, 1.0f, wallH * cam.tileW, wallCol);
+
+        // Draw Pillars to "join" segments
+        if (draw_n || draw_w) draw_pillar((float)c, (float)r);
+        if (draw_n || draw_e) draw_pillar((float)c + 1.0f, (float)r);
+        if (draw_s || draw_w) draw_pillar((float)c, (float)r + 1.0f);
+        if (draw_s || draw_e) draw_pillar((float)c + 1.0f, (float)r + 1.0f);
     }
 };
 
 class UnitRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& tile, int r, int c) override {
-        // Player 1 Soldiers (Red) - Positioned near the "back" corner of the tile
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
+        const auto& tile = board[r][c];
         if (tile.contains("soldiers") && tile["soldiers"].get<int>() > 0) {
             draw_unit(renderer, cam, r, c, tile["soldiers"].get<int>(), {255, 50, 50, 255}, -0.35f);
         }
-        // Player 2 Soldiers (Orange) - Positioned near the "front" corner of the tile
         if (tile.contains("p2_soldiers") && tile["p2_soldiers"].get<int>() > 0) {
             draw_unit(renderer, cam, r, c, tile["p2_soldiers"].get<int>(), {255, 120, 0, 255}, 0.35f);
         }
@@ -440,71 +482,61 @@ public:
             int cols = (int)board[0].size();
 
             // PASS 1: GROUND TILES
-            // Draw all tile floors first so nothing can ever cover objects from behind
             for (int r = 0; r < rows; ++r) {
                 for (int c = 0; c < cols; ++c) {
-                    tile_renderer.render(renderer, cam, board[r][c], r, c);
+                    tile_renderer.render(renderer, cam, board, r, c);
                 }
             }
 
             // PASS 2: OBJECTS (Back-to-Front)
-            // Render all objects on top of the established floor
             for (int r = 0; r < rows; ++r) {
                 for (int c = 0; c < cols; ++c) {
-                    wall_renderer.render(renderer, cam, board[r][c], r, c);
-                    tree_renderer.render(renderer, cam, board[r][c], r, c);
-                    crop_renderer.render(renderer, cam, board[r][c], r, c);
-                    sawmill_renderer.render(renderer, cam, board[r][c], r, c);
-                    warehouse_renderer.render(renderer, cam, board[r][c], r, c);
-                    building_renderer.render(renderer, cam, board[r][c], r, c);
-                    unit_renderer.render(renderer, cam, board[r][c], r, c);
+                    wall_renderer.render(renderer, cam, board, r, c);
+                    tree_renderer.render(renderer, cam, board, r, c);
+                    crop_renderer.render(renderer, cam, board, r, c);
+                    sawmill_renderer.render(renderer, cam, board, r, c);
+                    warehouse_renderer.render(renderer, cam, board, r, c);
+                    building_renderer.render(renderer, cam, board, r, c);
+                    unit_renderer.render(renderer, cam, board, r, c);
                 }
             }
         }
 
         // PASS 3: ANIMATIONS (Overlay)
-        // 1. Expansion Target (Yellow)
         if (state.contains("target_tile")) {
             int tr = state["target_tile"][0];
             int tc = state["target_tile"][1];
             Point2D p = cam.project((float)tc + 0.5f, (float)tr + 0.5f, 5.0f);
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-            SDL_SetRenderDrawColor(renderer, 255, 255, 0, 80); // Yellow Glow
+            SDL_SetRenderDrawColor(renderer, 255, 255, 0, 80); 
             Graphics::fill_circle(renderer, p.x, p.y, (int)(12 * cam.zoom));
             SDL_SetRenderDrawColor(renderer, 255, 255, 255, 150);
             SDL_RenderDrawLine(renderer, p.x - 8, p.y, p.x + 8, p.y);
             SDL_RenderDrawLine(renderer, p.x, p.y - 8, p.x, p.y + 8);
         }
 
-        // 2. Tactical Soldier Target (Red)
         if (state.contains("soldier_target_tile")) {
             int str = state["soldier_target_tile"][0];
             int stc = state["soldier_target_tile"][1];
             Point2D p = cam.project((float)stc + 0.5f, (float)str + 0.5f, 10.0f);
-            
-            // Pulse effect based on turn number
             int turn = state.contains("turn") ? state["turn"].get<int>() : 0;
             int pulse = (int)(sin(turn * 0.5f) * 5 + 15);
-
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-            SDL_SetRenderDrawColor(renderer, 255, 0, 0, 150); // Red Crosshair
+            SDL_SetRenderDrawColor(renderer, 255, 0, 0, 150); 
             Graphics::fill_circle(renderer, p.x, p.y, (int)(pulse * cam.zoom / 2));
-            
             SDL_SetRenderDrawColor(renderer, 255, 50, 50, 255);
             SDL_RenderDrawLine(renderer, p.x - 15, p.y, p.x + 15, p.y);
             SDL_RenderDrawLine(renderer, p.x, p.y - 15, p.x, p.y + 15);
         }
+
+        if (state.contains("shot_events")) {
             for (const auto& shot : state["shot_events"]) {
                 if (shot.contains("from") && shot.contains("to")) {
                     Point2D p_from = cam.project(shot["from"][1].get<float>() + 0.5f, shot["from"][0].get<float>() + 0.5f, 20.0f);
                     Point2D p_to = cam.project(shot["to"][1].get<float>() + 0.5f, shot["to"][0].get<float>() + 0.5f, 10.0f);
-
-                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 200); // White beam
+                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 200); 
                     SDL_RenderDrawLine(renderer, p_from.x, p_from.y, p_to.x, p_to.y);
-                    
-                    // Small burst at target
                     Graphics::fill_circle(renderer, p_to.x, p_to.y, (int)(4 * cam.zoom));
-                    // Small burst at source
                     Graphics::fill_circle(renderer, p_from.x, p_from.y, (int)(3 * cam.zoom));
                 }
             }
