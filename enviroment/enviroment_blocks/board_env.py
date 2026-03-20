@@ -157,17 +157,18 @@ class BoardEnv:
                 if attack > defense:
                     if (nr, nc) == p2_base: game_terminated = True
                     defeated_workers += int(self.grid[nr, nc, 2])
-                    self.grid[nr, nc, 0:3] = 0 
-                    self.grid[nr, nc, 5:7] = 0 
+                    self.grid[nr, nc, 0] = 1 # Captured by P1
+                    self.grid[nr, nc, 1:3] = 0 # Reset status and workers
+                    self.grid[nr, nc, 5:7] = 0 # Clear P2 soldiers and fortifications
                     next_p1[nr, nc] += count
                 else:
                     next_p1[r, c] += count # Failed attack, bounce back
             else:
-                if self.grid[nr, nc, 5] > 0: # Enemy soldiers present
+                if self.grid[nr, nc, 5] > 0: # Enemy soldiers present on neutral or own tile
                     if count > self.grid[nr, nc, 5]:
                         self.grid[nr, nc, 5] = 0
                         next_p1[nr, nc] += count
-                    # Else: soldier dies (not added to next_p1)
+                    # Else: soldier dies
                 else:
                     next_p1[nr, nc] += count
 
@@ -184,10 +185,14 @@ class BoardEnv:
                 defense = self.grid[nr, nc, 2] + (next_p1[nr, nc] * 200) + 100
                 if attack > defense:
                     if (nr, nc) == p1_base: game_terminated = True
-                    self.grid[nr, nc, 0:3] = 0
-                    self.grid[nr, nc, 6] = 0 
+                    self.grid[nr, nc, 0] = 2 # Captured by P2
+                    self.grid[nr, nc, 1:3] = 0 # Reset status and workers
+                    self.grid[nr, nc, 6] = 0 # Clear P1 buildings
                     next_p1[nr, nc] = 0
                     next_p2[nr, nc] += count
+                else:
+                    # Bounce or die (keeping it simple: bounce back to current pos)
+                    next_p2[r, c] += count
             else:
                 if next_p1[nr, nc] > 0:
                     if count > next_p1[nr, nc]:
@@ -427,4 +432,4 @@ class BoardEnv:
 
     def _generate_resources(self):
         for r in range(self.rows):
-            for c in range(self.cols): self.grid[r, c, 3] = np.random.randint(5, 11) if np.random.random() > 0.8 else 0
+            for c in range(self.cols): self.grid[r, c, 3] = np.random.randint(5, 11) if np.random.random() > 0.9 else 0

@@ -178,17 +178,168 @@ public:
     void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
         const auto& tile = board[r][c];
         int status = tile["status"];
-        if (status == 0 || status == 1 || status == 4 || status == 5 || status == 7 || status == 2 || status == 6) return; 
+
+        if (status == 0 || status == 1 || status == 4 || status == 5 ||
+            status == 7 || status == 2 || status == 6 || status == 3) return;
 
         SDL_Color col = {200, 200, 200, 255};
         float height = 0.5f;
 
-        if (status == 3) { // Base
-            col = {255, 215, 0, 255};
-            height = 0.8f;
-        }
 
         Graphics::draw_iso_box(renderer, cam, (float)c + 0.2f, (float)r + 0.2f, 0.6f, 0.6f, height * cam.tileW, col);
+    }
+};
+
+class TowerRenderer : public BaseRenderer {
+public:
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
+        const auto& tile = board[r][c];
+        int status = tile["status"];
+        if (status != 3) return; // Only render on "Base" tiles (status==3)
+
+        draw_tower(renderer, cam, (float)c, (float)r);
+    }
+
+private:
+    void draw_tower(SDL_Renderer* renderer, const IsoCamera& cam, float cx, float cy) {
+        float z = cam.zoom;
+
+        // ---- Color Palette (stone-like) ----
+        SDL_Color stone_light = {190, 185, 175, 255};  // top face
+        SDL_Color stone_mid   = {155, 150, 140, 255};  // front face (auto-darkened by draw_iso_box)
+        SDL_Color stone_dark  = {110, 105,  95, 255};  // dark side
+        SDL_Color merlon_col  = {170, 165, 155, 255};  // battlements
+        SDL_Color door_col    = { 45,  35,  25, 255};  // dark doorway
+        SDL_Color shadow_col  = { 80,  75,  68, 255};  // buttress shadow
+
+        float tW = cam.tileW;
+
+        // =============================
+        // 1. MAIN TOWER BODY
+        // =============================
+        float tower_x  = cx + 0.15f;
+        float tower_y  = cy + 0.15f;
+        float tower_w  = 0.70f;
+        float tower_d  = 0.70f;
+        float tower_h  = 1.8f * tW;   // tall tower
+
+        Graphics::draw_iso_box(renderer, cam,
+            tower_x, tower_y, tower_w, tower_d, tower_h, stone_mid, 0.0f);
+
+        // =============================
+        // 2. BUTTRESSES (side supports)
+        // Two on the front-left face, two on front-right
+        // =============================
+        float butt_w = 0.10f, butt_d = 0.10f, butt_h = tower_h * 0.55f;
+
+        // Left face buttresses
+        Graphics::draw_iso_box(renderer, cam,
+            tower_x - butt_w, tower_y + 0.15f,
+            butt_w, butt_d, butt_h, shadow_col, 0.0f);
+        Graphics::draw_iso_box(renderer, cam,
+            tower_x - butt_w, tower_y + 0.45f,
+            butt_w, butt_d, butt_h, shadow_col, 0.0f);
+
+        // Right face buttresses
+        Graphics::draw_iso_box(renderer, cam,
+            tower_x + tower_w, tower_y + 0.15f,
+            butt_w, butt_d, butt_h, shadow_col, 0.0f);
+        Graphics::draw_iso_box(renderer, cam,
+            tower_x + tower_w, tower_y + 0.45f,
+            butt_w, butt_d, butt_h, shadow_col, 0.0f);
+
+        // =============================
+        // 3. DOOR RECESS
+        // A dark thin box slightly inset on the front face
+        // =============================
+        float door_w = 0.14f, door_d = 0.04f, door_h = 0.22f * tW;
+        Graphics::draw_iso_box(renderer, cam,
+            tower_x + (tower_w - door_w) * 0.5f,
+            tower_y - door_d,           // slightly in front
+            door_w, door_d, door_h,
+            door_col, 0.0f);
+
+        // Door frame (slightly wider, lighter)
+        SDL_Color frame_col = {140, 130, 115, 255};
+        Graphics::draw_iso_box(renderer, cam,
+            tower_x + (tower_w - door_w) * 0.5f - 0.02f,
+            tower_y - door_d * 0.5f,
+            door_w + 0.04f, door_d * 0.5f, door_h + 0.03f * tW,
+            frame_col, 0.0f);
+
+        // =============================
+        // 4. PARAPET / WALL WALK
+        // Slightly wider slab just below the battlements
+        // =============================
+        float parapet_h = 0.08f * tW;
+        Graphics::draw_iso_box(renderer, cam,
+            tower_x - 0.04f, tower_y - 0.04f,
+            tower_w + 0.08f, tower_d + 0.08f,
+            parapet_h, stone_light, tower_h);
+
+        // =============================
+        // 5. BATTLEMENTS (Merlons)
+        // Row of square teeth around the top
+        // =============================
+        float merlon_w = 0.10f, merlon_d = 0.10f, merlon_h = 0.14f * tW;
+        float merlon_gap = 0.16f;  // spacing between merlons
+        float merlon_z = tower_h + parapet_h;
+
+        // Front-left edge merlons (along X axis)
+        for (float mx = tower_x - 0.04f; mx < tower_x + tower_w; mx += merlon_gap) {
+            Graphics::draw_iso_box(renderer, cam,
+                mx, tower_y - 0.04f,
+                merlon_w, merlon_d, merlon_h,
+                merlon_col, merlon_z);
+        }
+        // Front-right edge merlons (along Y axis)
+        for (float my = tower_y - 0.04f; my < tower_y + tower_d; my += merlon_gap) {
+            Graphics::draw_iso_box(renderer, cam,
+                tower_x + tower_w - 0.04f, my,
+                merlon_d, merlon_w, merlon_h,
+                merlon_col, merlon_z);
+        }
+
+        // =============================
+        // 6. STONE BLOCK TEXTURE LINES
+        // Horizontal lines across both visible faces
+        // =============================
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 35);
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        int num_courses = 7;
+        for (int i = 1; i <= num_courses; ++i) {
+            float stone_z = tower_h * ((float)i / (num_courses + 1));
+
+            // Left face stone line
+            Point2D sl1 = cam.project(tower_x,           tower_y,           stone_z);
+            Point2D sl2 = cam.project(tower_x,           tower_y + tower_d, stone_z);
+            SDL_RenderDrawLine(renderer, sl1.x, sl1.y, sl2.x, sl2.y);
+
+            // Right face stone line
+            Point2D sr1 = cam.project(tower_x + tower_w, tower_y,           stone_z);
+            Point2D sr2 = cam.project(tower_x + tower_w, tower_y + tower_d, stone_z);
+            SDL_RenderDrawLine(renderer, sr1.x, sr1.y, sr2.x, sr2.y);
+        }
+
+        // =============================
+        // 7. FLAG / BANNER on top
+        // =============================
+        float flag_z = merlon_z + merlon_h;
+        Point2D flag_base = cam.project(tower_x + tower_w * 0.5f, tower_y + tower_d * 0.5f, flag_z);
+
+        // Pole
+        SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+        SDL_RenderDrawLine(renderer,
+            flag_base.x, flag_base.y,
+            flag_base.x, flag_base.y - (int)(22 * z));
+
+        // Banner (team color — gold for base)
+        SDL_Color banner = {255, 200, 0, 255};
+        SDL_Rect b1 = { flag_base.x, flag_base.y - (int)(22*z), (int)(10*z), (int)(7*z) };
+        SDL_SetRenderDrawColor(renderer, banner.r, banner.g, banner.b, 255);
+        SDL_RenderFillRect(renderer, &b1);
+        SDL_SetRenderDrawColor(renderer, 200, 150, 0, 255);
+        SDL_RenderDrawRect(renderer, &b1);
     }
 };
 
@@ -383,33 +534,115 @@ public:
     void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
         const auto& tile = board[r][c];
         if (tile.contains("soldiers") && tile["soldiers"].get<int>() > 0) {
-            draw_unit(renderer, cam, r, c, tile["soldiers"].get<int>(), {255, 50, 50, 255}, -0.35f);
+            draw_unit(renderer, cam, r, c, tile["soldiers"].get<int>(), {220, 50, 50, 255}, -0.3f);
         }
         if (tile.contains("p2_soldiers") && tile["p2_soldiers"].get<int>() > 0) {
-            draw_unit(renderer, cam, r, c, tile["p2_soldiers"].get<int>(), {255, 120, 0, 255}, 0.35f);
+            draw_unit(renderer, cam, r, c, tile["p2_soldiers"].get<int>(), {50, 120, 220, 255}, 0.3f);
         }
     }
 
 private:
     void draw_unit(SDL_Renderer* renderer, const IsoCamera& cam, int r, int c, int count, SDL_Color col, float offset) {
-        float z_factor = cam.zoom;
-        // Base of the unit on the ground (z=0)
-        // Using the offset for both x and y to push them to opposite corners
-        Point2D p = cam.project(c + 0.5f + offset, r + 0.5f + offset, 0.0f);
-        
-        int unit_radius = (int)(7 * z_factor);
-        int unit_height = (int)(25 * z_factor); // Taller soldiers
+        float z = cam.zoom;
 
-        SDL_SetRenderDrawColor(renderer, col.r, col.g, col.b, col.a);
-        
-        // Draw 3D cylinder
-        for (int i = 0; i < unit_height; ++i) {
-            Graphics::fill_circle(renderer, p.x, p.y - i, unit_radius);
+        // Animation phase: unique per tile position + offset side
+        float phase = SDL_GetTicks() / 400.0f + (r * 7.3f + c * 3.7f + offset * 5.0f);
+        float leg_swing  = sinf(phase) * 0.06f;   // leg bob in world units
+        float arm_swing  = -sinf(phase) * 0.05f;  // opposite to legs
+        float body_bob   = fabsf(sinf(phase)) * 2.0f * z; // vertical bob in pixels
+
+        // Place 1 or 2 figures depending on count
+        int num_figures = (count < 2) ? count : 2;
+        float fig_offsets[2] = { offset - 0.08f, offset + 0.08f };
+
+        for (int f = 0; f < num_figures; ++f) {
+            float fx = c + 0.5f + fig_offsets[f];
+            float fy = r + 0.5f + fig_offsets[f] * 0.5f;
+
+            // ---- Skin & clothing colors ----
+            SDL_Color skin    = {220, 170, 120, 255};
+            SDL_Color armor   = col;                                         // torso = team color
+            SDL_Color dark    = {(Uint8)(col.r*0.6f), (Uint8)(col.g*0.6f), (Uint8)(col.b*0.6f), 255}; // legs
+            SDL_Color helmet  = {(Uint8)(col.r*0.8f), (Uint8)(col.g*0.8f), (Uint8)(col.b*0.8f), 255};
+
+            float S = 0.09f;   // base unit size in world coords
+            float body_bob_z = body_bob; // pixel offset upward
+
+            // Heights in world-z units (tileW scale):
+            // 1 unit z = cam.tileW pixels tall
+            float boot_h   = 0.04f * cam.tileW;
+            float leg_h    = 0.10f * cam.tileW;
+            float torso_h  = 0.13f * cam.tileW;
+            float head_h   = 0.09f * cam.tileW;
+            float arm_h    = 0.10f * cam.tileW;
+
+            float z0 = 0.0f;                         // ground
+            float z1 = boot_h;                       // above boots
+            float z2 = z1 + leg_h;                   // above legs (waist)
+            float z3 = z2 + torso_h;                 // above torso (shoulder)
+            float z4 = z3 + head_h;                  // top of head
+
+            // --- Shadow ---
+            Point2D ps = cam.project(fx, fy, 0.0f);
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 50);
+            Graphics::fill_circle(renderer, ps.x, ps.y, (int)(8 * z));
+
+            // Helper lambda: draw a box offset by body_bob_z pixels upward
+            // We achieve the vertical bob by nudging the screen projection.
+            // Since project() handles z in pixels via `z * zoom`, we add body_bob_z
+            // to z_start in world units: body_bob_z / cam.zoom
+            float bob_wu = body_bob_z / cam.zoom; // bob in world-z units
+
+            // --- LEFT LEG (swings forward) ---
+            SDL_Color boot_col = {40, 40, 40, 255};
+            Graphics::draw_iso_box(renderer, cam,
+                fx - S*1.1f + leg_swing, fy - S*0.5f,
+                S, S*0.9f, boot_h, boot_col, bob_wu + z0);
+            Graphics::draw_iso_box(renderer, cam,
+                fx - S*1.1f + leg_swing, fy - S*0.5f,
+                S*0.9f, S*0.9f, leg_h, dark, bob_wu + z1);
+
+            // --- RIGHT LEG (swings backward) ---
+            Graphics::draw_iso_box(renderer, cam,
+                fx + S*0.1f - leg_swing, fy - S*0.5f,
+                S, S*0.9f, boot_h, boot_col, bob_wu + z0);
+            Graphics::draw_iso_box(renderer, cam,
+                fx + S*0.1f - leg_swing, fy - S*0.5f,
+                S*0.9f, S*0.9f, leg_h, dark, bob_wu + z1);
+
+            // --- TORSO ---
+            Graphics::draw_iso_box(renderer, cam,
+                fx - S*1.1f, fy - S*0.5f,
+                S*2.0f, S*0.9f, torso_h, armor, bob_wu + z2);
+
+            // --- LEFT ARM (swings opposite to left leg) ---
+            Graphics::draw_iso_box(renderer, cam,
+                fx - S*1.5f + arm_swing, fy - S*0.5f,
+                S*0.6f, S*0.6f, arm_h, armor, bob_wu + z2);
+
+            // --- RIGHT ARM ---
+            Graphics::draw_iso_box(renderer, cam,
+                fx + S*0.85f - arm_swing, fy - S*0.5f,
+                S*0.6f, S*0.6f, arm_h, armor, bob_wu + z2);
+
+            // --- HEAD ---
+            Graphics::draw_iso_box(renderer, cam,
+                fx - S*0.7f, fy - S*0.45f,
+                S*1.4f, S*0.9f, head_h, skin, bob_wu + z3);
+
+            // --- HELMET (thin slab on top of head) ---
+            Graphics::draw_iso_box(renderer, cam,
+                fx - S*0.85f, fy - S*0.55f,
+                S*1.6f, S*1.0f, head_h * 0.25f, helmet, bob_wu + z3 + head_h);
+
+            // --- SOLDIER COUNT badge (if > 2) ---
+            if (count > 2 && f == 0) {
+                Point2D pb = cam.project(fx, fy, z4 + head_h * 0.3f + bob_wu);
+                SDL_SetRenderDrawColor(renderer, 255, 255, 255, 200);
+                Graphics::fill_circle(renderer, pb.x, pb.y - (int)(12*z), (int)(5*z));
+            }
         }
-        
-        // Head highlight (White)
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-        Graphics::fill_circle(renderer, p.x, p.y - unit_height, unit_radius);
     }
 };
 
@@ -496,6 +729,7 @@ public:
                     crop_renderer.render(renderer, cam, board, r, c);
                     sawmill_renderer.render(renderer, cam, board, r, c);
                     warehouse_renderer.render(renderer, cam, board, r, c);
+                    tower_renderer.render(renderer, cam, board, r, c);
                     building_renderer.render(renderer, cam, board, r, c);
                     unit_renderer.render(renderer, cam, board, r, c);
                 }
@@ -563,6 +797,7 @@ private:
     SawmillRenderer sawmill_renderer;
     WarehouseRenderer warehouse_renderer;
     BuildingRenderer building_renderer;
+    TowerRenderer tower_renderer;
     UnitRenderer unit_renderer;
 
     void draw_ui(const json& state) {
