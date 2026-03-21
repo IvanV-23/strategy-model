@@ -13,7 +13,9 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-using json = nlohmann::json;
+#include "include/game_state.hpp"
+#include "include/board_factory.hpp"
+#include "include/resource_system.hpp"
 
 // --- Math & Types ---
 struct Point3D {
@@ -165,30 +167,36 @@ namespace Graphics {
 // --- Entity Classes ---
 class BaseRenderer {
 public:
-    virtual void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) = 0;
+    virtual void render(SDL_Renderer* renderer, const IsoCamera& cam, const GameState& state, int r, int c) = 0;
 };
 
 class TileRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
-        const auto& tile = board[r][c];
-        int owner = tile["owner"];
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const GameState& state, int r, int c) override {
+        const auto& tile = state.board[r][c];
         
-        SDL_Color grass_green = {50, 160, 50, 255};
+        SDL_Color base_color;
+        
+        if (tile.status == TileStatus::Water) {
+            base_color = {50, 120, 200, 255}; // Water blue
+        } else {
+            base_color = {50, 160, 50, 255}; // Grass green
+        }
+        
         SDL_Color border_col = {255, 255, 255, 30}; // Default neutral (transparent white)
         
-        if (owner == 1) border_col = {50, 100, 255, 255}; // P1 Blue
-        else if (owner == 2) border_col = {255, 50, 50, 255}; // P2 Red
+        if (tile.owner == 1) border_col = {50, 100, 255, 255}; // P1 Blue
+        else if (tile.owner == 2) border_col = {255, 50, 50, 255}; // P2 Red
         
-        Graphics::draw_iso_diamond(renderer, cam, (float)c, (float)r, 1.0f, grass_green, border_col);
+        Graphics::draw_iso_diamond(renderer, cam, (float)c, (float)r, 1.0f, base_color, border_col);
     }
 };
 
 class BuildingRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
-        const auto& tile = board[r][c];
-        int status = tile["status"];
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const GameState& state, int r, int c) override {
+        const auto& tile = state.board[r][c];
+        int status = static_cast<int>(tile.status);
 
         if (status == 0 || status == 1 || status == 4 || status == 5 ||
             status == 7 || status == 2 || status == 6 || status == 3) return;
@@ -203,10 +211,9 @@ public:
 
 class TowerRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
-        const auto& tile = board[r][c];
-        int status = tile["status"];
-        if (status != 3) return; // Only render on "Base" tiles (status==3)
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const GameState& state, int r, int c) override {
+        const auto& tile = state.board[r][c];
+        if (tile.status != TileStatus::Base) return; // Only render on "Base" tiles
 
         draw_tower(renderer, cam, (float)c, (float)r);
     }
@@ -356,10 +363,9 @@ private:
 
 class WarehouseRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
-        const auto& tile = board[r][c];
-        int status = tile["status"];
-        if (status != 2 && status != 6) return; 
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const GameState& state, int r, int c) override {
+        const auto& tile = state.board[r][c];
+        if (tile.status != TileStatus::Warehouse && tile.status != TileStatus::Warehouse_P2) return; 
 
         SDL_Color beige = {210, 180, 140, 255};
         SDL_Color slate = {60, 60, 70, 255};
@@ -379,10 +385,9 @@ public:
 
 class CropRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
-        const auto& tile = board[r][c];
-        int status = tile["status"];
-        if (status != 5 && status != 7) return; 
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const GameState& state, int r, int c) override {
+        const auto& tile = state.board[r][c];
+        if (tile.status != TileStatus::Crops && tile.status != TileStatus::Crops_P2) return; 
 
         SDL_Color soilCol = {101, 67, 33, 255}; 
         SDL_Color plantCol = {100, 200, 50, 255}; 
@@ -405,10 +410,9 @@ public:
 
 class SawmillRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
-        const auto& tile = board[r][c];
-        int status = tile["status"];
-        if (status != 1 && status != 4) return; 
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const GameState& state, int r, int c) override {
+        const auto& tile = state.board[r][c];
+        if (tile.status != TileStatus::Sawmill && tile.status != TileStatus::Sawmill_P2) return; 
 
         Point2D p = cam.project(c + 0.5f, r + 0.5f);
         float z = cam.zoom;
@@ -431,12 +435,12 @@ public:
 
 class TreeRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
-        const auto& tile = board[r][c];
-        if (!tile.contains("wood") || tile["wood"].get<int>() <= 0) return;
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const GameState& state, int r, int c) override {
+        const auto& tile = state.board[r][c];
+        if (tile.wood <= 0) return;
 
-        int status = tile["status"];
-        if (status == 1 || status == 4) return;
+        if (tile.status == TileStatus::Sawmill || tile.status == TileStatus::Sawmill_P2) return;
+        if (tile.status == TileStatus::Water) return;
 
         Point2D p = cam.project(c + 0.5f, r + 0.5f);
         float z = cam.zoom;
@@ -463,15 +467,13 @@ public:
 
 class WallRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
-        const auto& tile = board[r][c];
-        if (!tile.contains("fortified")) return;
-        int f_lvl = tile["fortified"];
-        if (f_lvl <= 0) return;
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const GameState& state, int r, int c) override {
+        const auto& tile = state.board[r][c];
+        if (tile.fortified <= 0) return;
 
-        int rows = board.size();
-        int cols = board[0].size();
-        int owner = tile["owner"];
+        int rows = (int)state.board.size();
+        int cols = (int)state.board[0].size();
+        int owner = tile.owner;
 
         // Find closest enemy tiles
         float min_dist = 1e9f;
@@ -479,7 +481,7 @@ public:
 
         for (int er = 0; er < rows; ++er) {
             for (int ec = 0; ec < cols; ++ec) {
-                int e_owner = board[er][ec]["owner"];
+                int e_owner = state.board[er][ec].owner;
                 if (e_owner != 0 && e_owner != owner) {
                     float d = std::sqrt(std::pow(er - r, 2) + std::pow(ec - c, 2));
                     if (d < min_dist - 0.001f) {
@@ -518,9 +520,9 @@ public:
             if (std::abs(dists[3] - min_border_dist) < 0.001f) draw_e = true;
         }
 
-        SDL_Color wallCol = (f_lvl == 1) ? SDL_Color{160, 120, 60, 255} : SDL_Color{140, 140, 150, 255};
-        float wallH = (f_lvl == 1) ? 0.25f : 0.45f;
-        float wallT = (f_lvl == 1) ? 0.12f : 0.18f;
+        SDL_Color wallCol = (tile.fortified == 1) ? SDL_Color{160, 120, 60, 255} : SDL_Color{140, 140, 150, 255};
+        float wallH = (tile.fortified == 1) ? 0.25f : 0.45f;
+        float wallT = (tile.fortified == 1) ? 0.12f : 0.18f;
 
         auto draw_pillar = [&](float px, float py) {
             Graphics::draw_iso_box(renderer, cam, px - wallT*0.8f, py - wallT*0.8f, wallT * 1.6f, wallT * 1.6f, (wallH + 0.1f) * cam.tileW, wallCol);
@@ -542,13 +544,13 @@ public:
 
 class UnitRenderer : public BaseRenderer {
 public:
-    void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
-        const auto& tile = board[r][c];
-        if (tile.contains("soldiers") && tile["soldiers"].get<int>() > 0) {
-            draw_unit(renderer, cam, r, c, tile["soldiers"].get<int>(), {220, 50, 50, 255}, -0.3f);
+    void render(SDL_Renderer* renderer, const IsoCamera& cam, const GameState& state, int r, int c) override {
+        const auto& tile = state.board[r][c];
+        if (tile.soldiers > 0) {
+            draw_unit(renderer, cam, r, c, tile.soldiers, {220, 50, 50, 255}, -0.3f);
         }
-        if (tile.contains("p2_soldiers") && tile["p2_soldiers"].get<int>() > 0) {
-            draw_unit(renderer, cam, r, c, tile["p2_soldiers"].get<int>(), {50, 120, 220, 255}, 0.3f);
+        if (tile.p2_soldiers > 0) {
+            draw_unit(renderer, cam, r, c, tile.p2_soldiers, {50, 120, 220, 255}, 0.3f);
         }
     }
 
@@ -660,19 +662,32 @@ private:
 // --- Main Application ---
 class GameStateManager {
 public:
-    json data;
+    json raw_data;
     std::mutex mtx;
     bool updated = false;
+    GameState initial_board;
+    ResourceSystem resource_system;
+
+    GameStateManager() {
+        initial_board = BoardFactory::create_default(16, 16, 0, 0, 15, 15);
+    }
 
     void update(const json& j) {
         std::lock_guard<std::mutex> lock(mtx);
-        data = j;
+        raw_data = j;
         updated = true;
     }
 
-    json get_data() {
+    GameState get_data() {
         std::lock_guard<std::mutex> lock(mtx);
-        return data;
+        if (updated && !raw_data.is_null()) {
+            GameState gs = GameState::from_json(raw_data);
+            if (!raw_data.contains("p_res")) {
+                resource_system.tick(gs);
+            }
+            return gs;
+        }
+        return initial_board;
     }
 };
 
@@ -714,43 +729,40 @@ public:
     }
 
     void render() {
-        json state = global_state.get_data();
-        if (state.is_null()) return;
+        GameState state = global_state.get_data();
+        if (state.board.empty()) return;
 
         SDL_SetRenderDrawColor(renderer, 15, 15, 20, 255);
         SDL_RenderClear(renderer);
 
-        if (state.contains("board")) {
-            const auto& board = state["board"];
-            int rows = (int)board.size();
-            int cols = (int)board[0].size();
+        int rows = (int)state.board.size();
+        int cols = (int)state.board[0].size();
 
-            // PASS 1: GROUND TILES
-            for (int r = 0; r < rows; ++r) {
-                for (int c = 0; c < cols; ++c) {
-                    tile_renderer.render(renderer, cam, board, r, c);
-                }
+        // PASS 1: GROUND TILES
+        for (int r = 0; r < rows; ++r) {
+            for (int c = 0; c < cols; ++c) {
+                tile_renderer.render(renderer, cam, state, r, c);
             }
+        }
 
-            // PASS 2: OBJECTS (Back-to-Front)
-            for (int r = 0; r < rows; ++r) {
-                for (int c = 0; c < cols; ++c) {
-                    wall_renderer.render(renderer, cam, board, r, c);
-                    tree_renderer.render(renderer, cam, board, r, c);
-                    crop_renderer.render(renderer, cam, board, r, c);
-                    sawmill_renderer.render(renderer, cam, board, r, c);
-                    warehouse_renderer.render(renderer, cam, board, r, c);
-                    tower_renderer.render(renderer, cam, board, r, c);
-                    building_renderer.render(renderer, cam, board, r, c);
-                    unit_renderer.render(renderer, cam, board, r, c);
-                }
+        // PASS 2: OBJECTS (Back-to-Front)
+        for (int r = 0; r < rows; ++r) {
+            for (int c = 0; c < cols; ++c) {
+                wall_renderer.render(renderer, cam, state, r, c);
+                tree_renderer.render(renderer, cam, state, r, c);
+                crop_renderer.render(renderer, cam, state, r, c);
+                sawmill_renderer.render(renderer, cam, state, r, c);
+                warehouse_renderer.render(renderer, cam, state, r, c);
+                tower_renderer.render(renderer, cam, state, r, c);
+                building_renderer.render(renderer, cam, state, r, c);
+                unit_renderer.render(renderer, cam, state, r, c);
             }
         }
 
         // PASS 3: ANIMATIONS (Overlay)
-        if (state.contains("target_tile")) {
-            int tr = state["target_tile"][0];
-            int tc = state["target_tile"][1];
+        if (state.target_tile.has_value()) {
+            int tr = state.target_tile->first;
+            int tc = state.target_tile->second;
             Point2D p = cam.project((float)tc + 0.5f, (float)tr + 0.5f, 5.0f);
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
             SDL_SetRenderDrawColor(renderer, 255, 255, 0, 80); 
@@ -760,12 +772,11 @@ public:
             SDL_RenderDrawLine(renderer, p.x, p.y - 8, p.x, p.y + 8);
         }
 
-        if (state.contains("soldier_target_tile")) {
-            int str = state["soldier_target_tile"][0];
-            int stc = state["soldier_target_tile"][1];
+        if (state.soldier_target_tile.has_value()) {
+            int str = state.soldier_target_tile->first;
+            int stc = state.soldier_target_tile->second;
             Point2D p = cam.project((float)stc + 0.5f, (float)str + 0.5f, 10.0f);
-            int turn = state.contains("turn") ? state["turn"].get<int>() : 0;
-            int pulse = (int)(sin(turn * 0.5f) * 5 + 15);
+            int pulse = (int)(sin(state.turn * 0.5f) * 5 + 15);
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
             SDL_SetRenderDrawColor(renderer, 255, 0, 0, 150); 
             Graphics::fill_circle(renderer, p.x, p.y, (int)(pulse * cam.zoom / 2));
@@ -774,17 +785,13 @@ public:
             SDL_RenderDrawLine(renderer, p.x, p.y - 15, p.x, p.y + 15);
         }
 
-        if (state.contains("shot_events")) {
-            for (const auto& shot : state["shot_events"]) {
-                if (shot.contains("from") && shot.contains("to")) {
-                    Point2D p_from = cam.project(shot["from"][1].get<float>() + 0.5f, shot["from"][0].get<float>() + 0.5f, 20.0f);
-                    Point2D p_to = cam.project(shot["to"][1].get<float>() + 0.5f, shot["to"][0].get<float>() + 0.5f, 10.0f);
-                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 200); 
-                    SDL_RenderDrawLine(renderer, p_from.x, p_from.y, p_to.x, p_to.y);
-                    Graphics::fill_circle(renderer, p_to.x, p_to.y, (int)(4 * cam.zoom));
-                    Graphics::fill_circle(renderer, p_from.x, p_from.y, (int)(3 * cam.zoom));
-                }
-            }
+        for (const auto& shot : state.shot_events) {
+            Point2D p_from = cam.project((float)shot.from.second + 0.5f, (float)shot.from.first + 0.5f, 20.0f);
+            Point2D p_to = cam.project((float)shot.to.second + 0.5f, (float)shot.to.first + 0.5f, 10.0f);
+            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 200); 
+            SDL_RenderDrawLine(renderer, p_from.x, p_from.y, p_to.x, p_to.y);
+            Graphics::fill_circle(renderer, p_to.x, p_to.y, (int)(4 * cam.zoom));
+            Graphics::fill_circle(renderer, p_from.x, p_from.y, (int)(3 * cam.zoom));
         }
 
         draw_ui(state);
@@ -811,7 +818,7 @@ private:
     TowerRenderer tower_renderer;
     UnitRenderer unit_renderer;
 
-    void draw_ui(const json& state) {
+    void draw_ui(const GameState& state) {
         auto draw_text = [&](const std::string& text, int x, int y, SDL_Color col) {
             if (!font) return;
             SDL_Surface* s = TTF_RenderText_Blended(font, text.c_str(), col);
@@ -826,28 +833,21 @@ private:
         SDL_SetRenderDrawColor(renderer, 30, 30, 40, 200);
         SDL_RenderFillRect(renderer, &ui_bg);
 
-        if (state.contains("p_res")) {
-            const auto& res = state["p_res"];
-            draw_text("GOLD: " + std::to_string((int)res[0].get<double>()), 20, 20, {255, 215, 0, 255});
-            draw_text("WOOD: " + std::to_string((int)res[1].get<double>()), 150, 20, {150, 100, 50, 255});
-        }
+        draw_text("GOLD: " + std::to_string((int)state.p_res.gold), 20, 20, {255, 215, 0, 255});
+        draw_text("WOOD: " + std::to_string((int)state.p_res.wood), 150, 20, {150, 100, 50, 255});
 
         // Count soldiers from board data
         int p1_sols = 0, p2_sols = 0;
-        if (state.contains("board")) {
-            for (const auto& row : state["board"]) {
-                for (const auto& tile : row) {
-                    if (tile.contains("soldiers")) p1_sols += tile["soldiers"].get<int>();
-                    if (tile.contains("p2_soldiers")) p2_sols += tile["p2_soldiers"].get<int>();
-                }
+        for (const auto& row : state.board) {
+            for (const auto& tile : row) {
+                p1_sols += tile.soldiers;
+                p2_sols += tile.p2_soldiers;
             }
         }
         draw_text("P1 SOL: " + std::to_string(p1_sols), 300, 20, {255, 50, 50, 255});
         draw_text("P2 SOL: " + std::to_string(p2_sols), 450, 20, {255, 120, 0, 255});
 
-        if (state.contains("turn")) {
-            draw_text("TURN: " + std::to_string(state["turn"].get<int>()), width / 2 + 100, 20, {255, 255, 255, 255});
-        }
+        draw_text("TURN: " + std::to_string(state.turn), width / 2 + 100, 20, {255, 255, 255, 255});
         
         draw_text("Arrows: Pan | +/-: Zoom", width - 220, 20, {180, 180, 180, 255});
     }

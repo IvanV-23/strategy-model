@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.10)
 project(StrategyRenderer)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 # --- Dependencies via vcpkg ---
 find_package(SDL2 CONFIG REQUIRED)
 find_package(SDL2_ttf CONFIG REQUIRED)
@@ -15,6 +18,8 @@ set(SOURCES
     src/camera.cpp
     src/graphics_utils.cpp
     src/network.cpp
+    src/board_factory.cpp
+    src/resource_system.cpp
     src/renderers/tile_renderer.cpp
     src/renderers/building_renderer.cpp
     src/renderers/tower_renderer.cpp
@@ -58,3 +63,21 @@ target_include_directories(test_camera PRIVATE include)
 target_link_libraries(test_camera GTest::gtest GTest::gtest_main)
 
 add_test(NAME CameraTest COMMAND test_camera)
+
+add_executable(test_game_state tests/test_game_state.cpp)
+target_include_directories(test_game_state PRIVATE include)
+target_link_libraries(test_game_state GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+
+add_test(NAME GameStateTest COMMAND test_game_state)
+
+add_executable(test_board_factory tests/test_board_factory.cpp src/board_factory.cpp)
+target_include_directories(test_board_factory PRIVATE include)
+target_link_libraries(test_board_factory GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+
+add_test(NAME BoardFactoryTest COMMAND test_board_factory)
+
+add_executable(test_resource_system tests/test_resource_system.cpp src/resource_system.cpp src/board_factory.cpp)
+target_include_directories(test_resource_system PRIVATE include)
+target_link_libraries(test_resource_system GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+
+add_test(NAME ResourceSystemTest COMMAND test_resource_system)

@@ -24,9 +24,19 @@ class BoardEnv:
         self.grid[self.rows-1, self.cols-1, :3] = [2, 3, 10]
         self.grid[self.rows-1, self.cols-1, 6] = 2 # Default Fortification Level 2
         if np.sum(resource_layer) == 0: self._generate_resources()
+        self._generate_water()
         self.p1_trade_manager.active_routes = []
         self.lost_soldiers_combat = 0
         return self.grid
+
+    def _generate_water(self):
+        water_chance = 0.05
+        for r in range(self.rows):
+            for c in range(self.cols):
+                if (r, c) == (0, 0) or (r, c) == (self.rows-1, self.cols-1):
+                    continue
+                if np.random.random() < water_chance:
+                    self.grid[r, c, 1] = 8
 
     def update_board(self):
         self.p1_buildings_manager.update_board(self.grid, self.rows, self.cols)
