@@ -49,7 +49,7 @@ public:
 
 // --- Render Helpers ---
 namespace Graphics {
-    void draw_iso_diamond(SDL_Renderer* renderer, const IsoCamera& cam, float x, float y, float size, SDL_Color color) {
+    void draw_iso_diamond(SDL_Renderer* renderer, const IsoCamera& cam, float x, float y, float size, SDL_Color color, SDL_Color border_color = {255, 255, 255, 30}) {
         Point2D p1 = cam.project(x, y);
         Point2D p2 = cam.project(x + size, y);
         Point2D p3 = cam.project(x + size, y + size);
@@ -67,11 +67,19 @@ namespace Graphics {
         SDL_RenderGeometry(renderer, nullptr, vertices, 4, indices, 6);
         
         // Border
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 30);
+        SDL_SetRenderDrawColor(renderer, border_color.r, border_color.g, border_color.b, border_color.a);
         SDL_RenderDrawLine(renderer, p1.x, p1.y, p2.x, p2.y);
         SDL_RenderDrawLine(renderer, p2.x, p2.y, p3.x, p3.y);
         SDL_RenderDrawLine(renderer, p3.x, p3.y, p4.x, p4.y);
         SDL_RenderDrawLine(renderer, p4.x, p4.y, p1.x, p1.y);
+        
+        // If it's a player border, make it a bit thicker/more visible
+        if (border_color.a > 100) {
+            SDL_RenderDrawLine(renderer, p1.x, p1.y + 1, p2.x, p2.y + 1);
+            SDL_RenderDrawLine(renderer, p2.x, p2.y + 1, p3.x, p3.y + 1);
+            SDL_RenderDrawLine(renderer, p3.x, p3.y + 1, p4.x, p4.y + 1);
+            SDL_RenderDrawLine(renderer, p4.x, p4.y + 1, p1.x, p1.y + 1);
+        }
     }
 
     void draw_iso_box(SDL_Renderer* renderer, const IsoCamera& cam, float x, float y, float w, float d, float h, SDL_Color color, float z_start = 0.0f) {
@@ -165,11 +173,14 @@ public:
     void render(SDL_Renderer* renderer, const IsoCamera& cam, const json& board, int r, int c) override {
         const auto& tile = board[r][c];
         int owner = tile["owner"];
-        SDL_Color col = {40, 40, 45, 255};
-        if (owner == 1) col = {30, 60, 120, 255};
-        else if (owner == 2) col = {100, 30, 30, 255};
         
-        Graphics::draw_iso_diamond(renderer, cam, (float)c, (float)r, 1.0f, col);
+        SDL_Color grass_green = {50, 160, 50, 255};
+        SDL_Color border_col = {255, 255, 255, 30}; // Default neutral (transparent white)
+        
+        if (owner == 1) border_col = {50, 100, 255, 255}; // P1 Blue
+        else if (owner == 2) border_col = {255, 50, 50, 255}; // P2 Red
+        
+        Graphics::draw_iso_diamond(renderer, cam, (float)c, (float)r, 1.0f, grass_green, border_col);
     }
 };
 

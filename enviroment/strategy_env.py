@@ -172,6 +172,7 @@ class StrategyEnv(gym.Env):
             self.board_env.spawn_soldiers(player_id=1, count=2)
         
         terminated_soldiers, sol_defeated_workers, accuracy_info, damage_dealt = self.board_env.move_soldiers(soldier_agent, p1_goal, target_tile=(self.soldier_target_row, self.soldier_target_col))
+        
         if terminated_soldiers: terminated = True
         self.defeated_workers += sol_defeated_workers
         self.damage_dealt_to_opponent = damage_dealt
