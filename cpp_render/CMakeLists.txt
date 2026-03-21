@@ -21,6 +21,7 @@ set(SOURCES
     src/board_factory.cpp
     src/resource_system.cpp
     src/build_system.cpp
+    src/combat_system.cpp
     src/renderers/tile_renderer.cpp
     src/renderers/building_renderer.cpp
     src/renderers/tower_renderer.cpp
@@ -88,3 +89,9 @@ target_include_directories(test_build_system PRIVATE include)
 target_link_libraries(test_build_system GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
 
 add_test(NAME BuildSystemTest COMMAND test_build_system)
+
+add_executable(test_combat_system tests/test_combat_system.cpp src/combat_system.cpp src/board_factory.cpp)
+target_include_directories(test_combat_system PRIVATE include)
+target_link_libraries(test_combat_system GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+
+add_test(NAME CombatSystemTest COMMAND test_combat_system)
