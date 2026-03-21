@@ -22,6 +22,7 @@ set(SOURCES
     src/resource_system.cpp
     src/build_system.cpp
     src/combat_system.cpp
+    src/turn_manager.cpp
     src/renderers/tile_renderer.cpp
     src/renderers/building_renderer.cpp
     src/renderers/tower_renderer.cpp
@@ -95,3 +96,9 @@ target_include_directories(test_combat_system PRIVATE include)
 target_link_libraries(test_combat_system GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
 
 add_test(NAME CombatSystemTest COMMAND test_combat_system)
+
+add_executable(test_turn_manager tests/test_turn_manager.cpp src/turn_manager.cpp src/resource_system.cpp src/build_system.cpp src/combat_system.cpp src/board_factory.cpp)
+target_include_directories(test_turn_manager PRIVATE include)
+target_link_libraries(test_turn_manager GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+
+add_test(NAME TurnManagerTest COMMAND test_turn_manager)
