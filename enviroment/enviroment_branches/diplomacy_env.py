@@ -76,7 +76,7 @@ class DiplomacyEnv:
             
             # Deduct the actual workers lost on the tile from the opponent's pool
             self.opponent.resources[2] = int(max(0, self.opponent.resources[2] - defeated_workers))
-            reward += defeated_workers * 0.01  
+            # reward += defeated_workers * 0.01 (Now handled globally)
 
         # 4. Handle game termination
         if base_captured:

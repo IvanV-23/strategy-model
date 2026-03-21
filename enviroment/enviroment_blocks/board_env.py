@@ -1,40 +1,31 @@
 import numpy as np
+import torch
+import math
 
 from enviroment.enviroment_blocks.board_blocks.trade_route_manager_env import TradeRouteManager
 from enviroment.enviroment_blocks.board_blocks.buildings_manager_env import BuildingsManager
 
 class BoardEnv:
     def __init__(self, rows=16, cols=16):
-        # Board dimensions
         self.rows = rows
         self.cols = cols
-        
-        # Index 0: Owner (0=None, 1=P1, 2=P2)
-        # Index 1: Status (Building types)
-        # Index 2: Workers
-        # Index 3: Resources (Wood)
-        # Index 4: Soldiers
-        self.grid = np.zeros((rows, cols, 5), dtype=np.int32)
-
-        # Managers
+        # 0: Owner, 1: Status, 2: Workers, 3: Wood, 4: P1 Sol, 5: P2 Sol, 6: Fort
+        self.grid = np.zeros((rows, cols, 7), dtype=np.int32)
         self.p1_trade_manager = TradeRouteManager(base_coords=(0, 0))
         self.p1_buildings_manager = BuildingsManager(self.grid, rows, cols)
+        self.lost_soldiers_combat = 0
 
     def reset(self):
-        # Preserve resource distribution if it exists, or generate new
         resource_layer = self.grid[:, :, 3].copy() 
-        self.grid = np.zeros((self.rows, self.cols, 5), dtype=np.int32)
+        self.grid = np.zeros((self.rows, self.cols, 7), dtype=np.int32)
         self.grid[:, :, 3] = resource_layer
-        
-        # Set starting bases
-        # [Owner, Status=Base, Workers]
         self.grid[0, 0, :3] = [1, 3, 10]
+        self.grid[0, 0, 6] = 2 # Default Fortification Level 2
         self.grid[self.rows-1, self.cols-1, :3] = [2, 3, 10]
-
-        if np.sum(resource_layer) == 0:
-            self._generate_resources()
-
+        self.grid[self.rows-1, self.cols-1, 6] = 2 # Default Fortification Level 2
+        if np.sum(resource_layer) == 0: self._generate_resources()
         self.p1_trade_manager.active_routes = []
+        self.lost_soldiers_combat = 0
         return self.grid
 
     def update_board(self):
@@ -42,417 +33,403 @@ class BoardEnv:
 
     def spawn_soldiers(self, player_id, count):
         base_coords = (0, 0) if player_id == 1 else (self.rows - 1, self.cols - 1)
-        self.grid[base_coords[0], base_coords[1], 4] += count
+        channel = 4 if player_id == 1 else 5
+        self.grid[base_coords[0], base_coords[1], channel] += count
 
-    def move_soldiers(self):
-        """
-        Moves soldiers randomly. Returns True if opponent base is captured.
-        """
-        terminated = False
-        p2_base = (self.rows - 1, self.cols - 1)
-        next_soldier_grid = np.zeros((self.rows, self.cols), dtype=np.int32)
-        soldier_indices = np.argwhere(self.grid[:, :, 4] > 0)
+    def debug_soldier_brain(self, r, c, tr, tc, dr_rel, dc_rel, action):
+        """Prints a tactical snapshot of why a soldier chose an action."""
+        print("\n--- BRAIN SNAPSHOT ---")
+        print(f"Position: ({r}, {c}) | Target: ({tr}, {tc})")
+        print(f"Relative Input: dr={dr_rel:.3f}, dc={dc_rel:.3f}")
         
-        for r, c in soldier_indices:
+        # Map the action back to a direction name
+        action_names = ["STAY", "NORTH", "SOUTH", "EAST", "WEST"]
+        print(f"Model Decision: {action_names[action]}")
+        
+        # Visual check: Is the target physically where we think it is?
+        grid_view = np.full((5, 5), ".")
+        grid_view[2, 2] = "S"  # Soldier in center
+        
+        # Calculate target position relative to local view
+        tr_local, tc_local = 2 + (tr - r), 2 + (tc - c)
+        if 0 <= tr_local < 5 and 0 <= tc_local < 5:
+            grid_view[tr_local, tc_local] = "T"
+        
+        print("Local Layout (S=Soldier, T=Target):")
+        for row in grid_view:
+            print(" ".join(row))
+        print("----------------------")
+
+    def move_soldiers(self, soldier_agent=None, p1_goal=None, target_tile=None):
+        """
+        Moves soldiers. 
+        P1 uses the Tactical Agent with relative goal injection and double buffering.
+        P2 uses random movement.
+        """
+        game_terminated = False
+        defeated_workers = 0
+        closer_count = 0
+        total_soldiers_p1 = 0
+
+        p1_base, p2_base = (0, 0), (self.rows - 1, self.cols - 1)
+        full_obs = self.full_board_state() 
+
+        # --- 1. PROCESS P1 SOLDIERS ---
+        next_p1 = np.zeros((self.rows, self.cols), dtype=np.int32)
+        p1_indices = np.argwhere(self.grid[:, :, 4] > 0)
+        
+        for r, c in p1_indices:
             count = self.grid[r, c, 4]
-            neighbors = self._get_neighbors(r, c)
-            if not neighbors:
-                next_soldier_grid[r, c] += count
-                continue
-
-            idx = np.random.randint(len(neighbors))
-            nr, nc = neighbors[idx]
-            target_owner = self.grid[nr, nc, 0]
+            total_soldiers_p1 += 1
+            nr, nc = r, c 
             
-            if target_owner == 2: # P1 Soldiers attacking P2
-                attack_power = count * 200
-                defense_power = self.grid[nr, nc, 2] # Workers
-                if self.grid[nr, nc, 1] > 0: defense_power += 20 # Building
+            if soldier_agent is not None and p1_goal is not None and target_tile is not None:
+                tr, tc = target_tile
                 
-                # Base or Tile bonus
-                defense_power += 100
+                # 1. Calculate RAW relative direction
+                dr_raw = float(tr - r)
+                dc_raw = float(tc - c)
+                
+                # 2. SIGNAL BOOST: Use tanh to ensure the agent feels 'pressure' 
+                # even at small distances (1-2 tiles).
+                dr_in = math.tanh(dr_raw) 
+                dc_in = math.tanh(dc_raw)
+                
+                # 3. Inject into goal vector
+                grunt_goal = p1_goal.clone()
+                grunt_goal[0, 0] = torch.tensor(dr_in, dtype=torch.float32, device=p1_goal.device)
+                grunt_goal[0, 1] = torch.tensor(dc_in, dtype=torch.float32, device=p1_goal.device)
+                grunt_goal[0, 2] = 0.0 # Move mode
+                
+                # DEBUG PRINT
+                if total_soldiers_p1 == 1:
+                    print(f"[DEBUG] Soldier at ({r},{c}) | Target: ({tr},{tc}) | Rel In: ({dr_in:.2f}, {dc_in:.2f})")
+                
+                # 4. Local view extraction
+                local_view = self._get_local_view(full_obs, r, c, size=5)
+                # NORMALIZATION: The model was trained with randn (std 1). 
+                # Real board values are much higher (0-50).
+                local_view_norm = local_view.astype(np.float32) / 10.0
+                local_t = torch.from_numpy(local_view_norm).unsqueeze(0).to(p1_goal.device)
+                
+                with torch.no_grad():
+                    logits = soldier_agent(local_t, grunt_goal)
+                    action = torch.argmax(logits, dim=1).item()
+                
+                # DEBUG PRINT TACTICAL
+                if total_soldiers_p1 == 1:
+                    moves_names = ["STAY", "N", "S", "E", "W"]
+                    print(f"[DEBUG] Soldier at ({r},{c}) | Target: ({tr},{tc})")
+                    print(f"[DEBUG] Rel In: dr={dr_in:.2f}, dc={dc_in:.2f} | Mode: {grunt_goal[0,2].item()}")
+                    print(f"[DEBUG] Action: {moves_names[action]} | Vision Mean: {local_view_norm.mean():.2f}")
+                    # Visual local check
+                    lv = np.full((5,5), ".")
+                    lv[2,2] = "S"
+                    tr_l, tc_l = 2 + (tr-r), 2 + (tc-c)
+                    if 0<=tr_l<5 and 0<=tc_l<5: lv[tr_l, tc_l] = "T"
+                    print("Local View:")
+                    for row in lv: print(" ".join(row))
 
-                if attack_power > defense_power:
-                    # Success: Wipe tile
-                    if (nr, nc) == p2_base:
-                        terminated = True
-                        print("SOLDIERS CAPTURED THE ENEMY BASE!")
+                
+                # --- ANTI-STUCK JITTER ---
+                # If the model picks STAY but isn't at the target, 15% chance to force movement
+                dist_to_target = abs(dr_raw) + abs(dc_raw)
+                if action == 0 and dist_to_target > 0.5:
+                    if np.random.rand() < 0.15:
+                        action = np.random.randint(1, 5)
 
-                    self.grid[nr, nc, 0] = 0
-                    self.grid[nr, nc, 1] = 0
-                    self.grid[nr, nc, 2] = 0
-                    next_soldier_grid[nr, nc] += count 
+                moves = [(0,0), (-1,0), (1,0), (0,1), (0,-1)]
+                dr, dc = moves[action]
+                
+                # 5. Boundary Check
+                if 0 <= r + dr < self.rows and 0 <= c + dc < self.cols:
+                    nr, nc = r + dr, c + dc
+                    if (abs(tr - nr) + abs(tc - nc)) < dist_to_target:
+                        closer_count += 1
                 else:
-                    # Failure: Soldiers perish
-                    pass 
-            else:
-                next_soldier_grid[nr, nc] += count
+                    nr, nc = r, c # Stay put if move is invalid
 
-        self.grid[:, :, 4] = next_soldier_grid
-        return terminated
+            # --- P1 COMBAT RESOLUTION ---
+            target_owner = self.grid[nr, nc, 0]
+            if target_owner == 2: # Enemy tile
+                attack = count * 200
+                defense = self.grid[nr, nc, 2] + (self.grid[nr, nc, 5] * 200) + 100
+                if attack > defense:
+                    if (nr, nc) == p2_base: game_terminated = True
+                    defeated_workers += int(self.grid[nr, nc, 2])
+                    self.grid[nr, nc, 0] = 1 # Captured by P1
+                    self.grid[nr, nc, 1:3] = 0 # Reset status and workers
+                    self.grid[nr, nc, 5:7] = 0 # Clear P2 soldiers and fortifications
+                    next_p1[nr, nc] += count
+                else:
+                    next_p1[r, c] += count # Failed attack, bounce back
+            else:
+                if self.grid[nr, nc, 5] > 0: # Enemy soldiers present on neutral or own tile
+                    if count > self.grid[nr, nc, 5]:
+                        self.grid[nr, nc, 5] = 0
+                        next_p1[nr, nc] += count
+                    # Else: soldier dies
+                else:
+                    next_p1[nr, nc] += count
+
+        # --- 2. PROCESS P2 SOLDIERS ---
+        next_p2 = np.zeros((self.rows, self.cols), dtype=np.int32)
+        p2_indices = np.argwhere(self.grid[:, :, 5] > 0)
+        for r, c in p2_indices:
+            count = self.grid[r, c, 5]
+            possible_moves = self._get_neighbors(r, c) + [(r, c)]
+            nr, nc = possible_moves[np.random.randint(len(possible_moves))]
+            
+            if self.grid[nr, nc, 0] == 1: # P2 attacking P1
+                attack = count * 200
+                defense = self.grid[nr, nc, 2] + (next_p1[nr, nc] * 200) + 100
+                if attack > defense:
+                    if (nr, nc) == p1_base: game_terminated = True
+                    self.grid[nr, nc, 0] = 2 # Captured by P2
+                    self.grid[nr, nc, 1:3] = 0 # Reset status and workers
+                    self.grid[nr, nc, 6] = 0 # Clear P1 buildings
+                    next_p1[nr, nc] = 0
+                    next_p2[nr, nc] += count
+                else:
+                    # Bounce or die (keeping it simple: bounce back to current pos)
+                    next_p2[r, c] += count
+            else:
+                if next_p1[nr, nc] > 0:
+                    if count > next_p1[nr, nc]:
+                        next_p1[nr, nc] = 0
+                        next_p2[nr, nc] += count
+                else:
+                    next_p2[nr, nc] += count
+
+        # Final Grid Sync
+        self.grid[:, :, 4] = next_p1
+        self.grid[:, :, 5] = next_p2
+        
+        accuracy_info = (closer_count, total_soldiers_p1)
+        return game_terminated, defeated_workers, accuracy_info, 0
+
+    def _get_local_view(self, full_obs, r, c, size=5):
+            """
+            Corrected local view: Slices from the padded array 
+            using the offset created by the padding.
+            """
+            pad = size // 2
+            # Pad the spatial dimensions (H, W), not the channels
+            padded = np.pad(full_obs, ((0,0), (pad,pad), (pad,pad)), mode='constant')
+            
+            # In the padded array, the original (r, c) is now at (r+pad, c+pad)
+            # We want to slice from (r) to (r + size)
+            return padded[:, r : r + size, c : c + size]
 
     def grow_workers(self, p1_food_gen=None):
-        WORKER_LIMIT = 50
-        BASE_LIMIT = 500 
-        p1_base = (0, 0)
-        p2_base = (self.rows - 1, self.cols - 1)
-        
-        # P1 Growth
+        WORKER_LIMIT, BASE_LIMIT = 50, 500
+        p1_base, p2_base = (0, 0), (self.rows-1, self.cols-1)
         p1_tiles = np.argwhere(self.grid[:, :, 0] == 1)
-        if p1_food_gen is not None:
-            total_p1_workers = np.sum(self.grid[self.grid[:, :, 0] == 1, 2])
-            growth_multiplier = 1.02 + (p1_food_gen / (total_p1_workers + 50))
-            growth_multiplier = np.clip(growth_multiplier, 1.0, 2.0)
+        total_p1 = np.sum(self.grid[self.grid[:, :, 0] == 1, 2])
+        
+        if p1_food_gen is not None and p1_food_gen > 0:
+            mult = np.clip(1.0 + (p1_food_gen / (total_p1 + 50)), 1.0, 2.0)
         else:
-            growth_multiplier = 2.0
-
+            mult = 1.0 # NO FOOD = NO GROWTH
+            
         for r, c in p1_tiles:
-            self.grid[r, c, 2] = int(self.grid[r, c, 2] * growth_multiplier)
-            if (r, c) != p1_base:
-                self.grid[r, c, 2] = min(self.grid[r, c, 2], WORKER_LIMIT)
-            else:
-                self.grid[r, c, 2] = min(self.grid[r, c, 2], BASE_LIMIT)
-        
-        # P2 Growth
-        p2_tiles = np.argwhere(self.grid[:, :, 0] == 2)
-        for r, c in p2_tiles:
+            self.grid[r, c, 2] = int(self.grid[r, c, 2] * mult)
+            self.grid[r, c, 2] = min(self.grid[r, c, 2], BASE_LIMIT if (r, c) == p1_base else WORKER_LIMIT)
+        for r, c in np.argwhere(self.grid[:, :, 0] == 2):
             self.grid[r, c, 2] *= 2
-            if (r, c) != p2_base:
-                self.grid[r, c, 2] = min(self.grid[r, c, 2], WORKER_LIMIT)
-            else:
-                self.grid[r, c, 2] = min(self.grid[r, c, 2], BASE_LIMIT)
-        
-        return np.log1p(total_p1_workers) * 0.1
+            self.grid[r, c, 2] = min(self.grid[r, c, 2], BASE_LIMIT if (r, c) == p2_base else WORKER_LIMIT)
+        return np.log1p(total_p1) * 0.1
+
+    def fortify_tile(self, player_id, target_coords=None):
+        if target_coords is not None:
+            r, c = target_coords
+            if 0 <= r < self.rows and 0 <= c < self.cols:
+                if self.grid[r, c, 0] == player_id and self.grid[r, c, 6] < 2:
+                    self.grid[r, c, 6] += 1
+                    return True, f"at_{r}_{c}_lvl_{self.grid[r,c,6]}"
+            return False, "invalid_target"
+
+        owned = np.argwhere((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 6] < 2))
+        if not len(owned): return False, "none"
+        base = np.array([0, 0] if player_id == 1 else [self.rows-1, self.cols-1])
+        dists = [abs(r-base[0]) + abs(c-base[1]) for r, c in owned]
+        candidates = [owned[i] for i, d in enumerate(dists) if d == min(dists)]
+        r, c = candidates[np.random.randint(len(candidates))]
+        self.grid[r, c, 6] += 1
+        return True, f"at_{r}_{c}_lvl_{self.grid[r,c,6]}"
+
+    def process_fortification_defense(self):
+        """
+        Level 2 fortifications shoot adjacent enemy soldiers.
+        """
+        shot_events = []
+        # Find all Level 2 fortifications
+        for r, c in np.argwhere(self.grid[:, :, 6] == 2):
+            owner = self.grid[r, c, 0]
+            enemy_channel = 5 if owner == 1 else 4
+            for nr, nc in self._get_neighbors(r, c):
+                if self.grid[nr, nc, enemy_channel] > 0:
+                    self.grid[nr, nc, enemy_channel] -= 1
+                    shot_events.append({"from": (r, c), "to": (nr, nc)})
+                    if enemy_channel == 4: # P1 lost a soldier
+                         if hasattr(self, 'lost_soldiers_combat'):
+                             self.lost_soldiers_combat += 1
+        return shot_events
 
     def get_tile_data(self):
-        tile_data = []
-        for r in range(self.rows):
-            row_list = []
-            for c in range(self.cols):
-                row_list.append({
-                    "owner": int(self.grid[r, c, 0]),
-                    "status": int(self.grid[r, c, 1]), 
-                    "workers": int(self.grid[r, c, 2]),
-                    "wood": int(self.grid[r, c, 3]),
-                    "soldiers": int(self.grid[r, c, 4])
-                })
-            tile_data.append(row_list)
-        return tile_data
-
-    def _generate_resources(self):
-        for r in range(self.rows):
-            for c in range(self.cols):
-                if np.random.random() > 0.8:
-                    self.grid[r, c, 3] = np.random.randint(5, 11)
-                else:
-                    self.grid[r, c, 3] = 0
+        return [[{"owner": int(self.grid[r,c,0]), "status": int(self.grid[r,c,1]), "workers": float(self.grid[r,c,2]), "wood": int(self.grid[r,c,3]), "soldiers": int(self.grid[r,c,4]), "p2_soldiers": int(self.grid[r,c,5]), "fortified": int(self.grid[r,c,6])} for c in range(self.cols)] for r in range(self.rows)]
 
     def _get_neighbors(self, r, c):
-        neighbors = []
-        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < self.rows and 0 <= nc < self.cols:
-                neighbors.append((nr, nc))
-        return neighbors
+        res = []
+        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+            if 0 <= r+dr < self.rows and 0 <= c+dc < self.cols: res.append((r+dr, c+dc))
+        return res
 
     def claim_adjacent_tile(self, owner_id):
-        """Used by the Opponent (Simple AI)"""
-        rows, cols = self.grid.shape[0], self.grid.shape[1]
-        terminated = False
-        enemy_base = (rows - 1, cols - 1) if int(owner_id) == 1 else (0, 0)
-        previous_owner = None 
-        mine_was_lost = False 
-
-        # 1. Find all potential tiles to attack
-        candidate_attacks = {} 
-        owned_coords = np.argwhere(self.grid[:, :, 0] == owner_id)
-        
-        for r, c in owned_coords:
-            attacking_force = self.grid[r, c, 2]
+        enemy_base = (self.rows-1, self.cols-1) if owner_id == 1 else (0,0)
+        attacks = {}
+        for r, c in np.argwhere(self.grid[:, :, 0] == owner_id):
+            force = self.grid[r, c, 2]
             for nr, nc in self._get_neighbors(r, c):
                 if self.grid[nr, nc, 0] != owner_id:
-                    if (nr, nc) not in candidate_attacks:
-                        candidate_attacks[(nr, nc)] = 0
-                    candidate_attacks[(nr, nc)] += attacking_force
-
-        if not candidate_attacks:
-            return False, False, None, 0, False
-
-        # 2. Filter candidates by battle logic
-        valid_conquests = []
-        for (tr, tc), attack_power in candidate_attacks.items():
-            target_owner = self.grid[tr, tc, 0]
-            target_defense = self.grid[tr, tc, 2]
-
-            if target_owner != 0:
-                target_defense += 100 
-                if self.grid[tr, tc, 1] > 0:
-                    target_defense += 20 
-
-            if (tr, tc) == (0, 0) or (tr, tc) == (rows - 1, cols - 1):
-                target_defense += 50
-
-            if target_owner == 0 or attack_power > target_defense:
-                valid_conquests.append(((tr, tc), attack_power))
-
-        # 3. Execute a random valid conquest
-        if valid_conquests:
-            idx = np.random.choice(len(valid_conquests))
-            (target_r, target_c), final_attack_power = valid_conquests[idx]
-            
-            previous_owner = int(self.grid[target_r, target_c, 0])
-            target_structure = int(self.grid[target_r, target_c, 1])
-            defeated_workers = int(self.grid[target_r, target_c, 2])
-            
-            if previous_owner != 0 and target_structure != 0:
-                mine_was_lost = True
-            
-            if (target_r, target_c) == enemy_base:
-                terminated = True
-            
-            self.grid[target_r, target_c, 0] = int(owner_id)
-            self.grid[target_r, target_c, 2] = 1 
-            
-            return True, terminated, previous_owner, defeated_workers, mine_was_lost
-        
+                    attacks[(nr, nc)] = attacks.get((nr, nc), 0) + force
+        valid = []
+        for (tr, tc), pwr in attacks.items():
+            dfn = self.grid[tr, tc, 2] + (100 if self.grid[tr, tc, 0] != 0 else 0) + (20 if self.grid[tr, tc, 1] > 0 else 0) + (100 if self.grid[tr, tc, 6] == 1 else 0) + (50 if (tr, tc) in [(0,0), (self.rows-1, self.cols-1)] else 0)
+            if self.grid[tr, tc, 0] == 0 or pwr > dfn: valid.append((tr, tc))
+        if valid:
+            tr, tc = valid[np.random.randint(len(valid))]
+            prev = int(self.grid[tr, tc, 0])
+            self.grid[tr, tc, 0], self.grid[tr, tc, 2], self.grid[tr, tc, 6] = int(owner_id), 1, 0
+            return True, (tr, tc) == enemy_base, prev, 0, (prev != 0 and self.grid[tr, tc, 1] != 0)
         return False, False, None, 0, False
 
-    def redistribute_workers(self, owner_id, total_workers, style=0):
+    def redistribute_workers(self, owner_id, total_workers):
         total_workers = int(total_workers)
-        # 1. Find all tiles currently owned by this player
-        owned_indices = np.argwhere(self.grid[:, :, 0] == owner_id)
-        num_tiles = len(owned_indices)
-
-        if num_tiles == 0: return True # Defeat
-
-        # 2. Rule: Every tile needs at least 1 worker
-        if total_workers < num_tiles:
-            base = (0, 0) if owner_id == 1 else (self.rows - 1, self.cols - 1)
-            distances = [np.linalg.norm(np.array(coord) - np.array(base)) for coord in owned_indices]
-            keep_indices = np.argsort(distances)[:total_workers]
-            
-            for i in range(num_tiles):
-                if i not in keep_indices:
-                    r, c = owned_indices[i]
-                    self.grid[r, c, 0] = 0 
-                    self.grid[r, c, 2] = 0 
-            
-            owned_indices = owned_indices[keep_indices]
-            num_tiles = len(owned_indices)
-
-        if num_tiles == 0: return True 
-
-        # 3. Strategic Weighting
-        weights = np.ones(num_tiles) 
-
-        # 4. Final Allocation
-        probs = weights / np.sum(weights)
-        remaining_workers = total_workers - num_tiles
-        WORKER_LIMIT = 50
-        base_coords = (0, 0) if owner_id == 1 else (self.rows - 1, self.cols - 1)
-        excess_workers = 0
-        
-        if remaining_workers > 0:
-            extra_allocations = np.random.multinomial(remaining_workers, probs)
-            for i, (r, c) in enumerate(owned_indices):
-                total_on_tile = 1 + extra_allocations[i]
-                if (r, c) != base_coords and total_on_tile > WORKER_LIMIT:
-                    excess_workers += (total_on_tile - WORKER_LIMIT)
-                    self.grid[r, c, 2] = WORKER_LIMIT
-                else:
-                    self.grid[r, c, 2] = total_on_tile
-            self.grid[base_coords[0], base_coords[1], 2] += excess_workers
+        owned = np.argwhere(self.grid[:, :, 0] == owner_id)
+        if not len(owned): return True
+        if total_workers < len(owned):
+            base = np.array([0,0] if owner_id == 1 else [self.rows-1, self.cols-1])
+            dists = [np.linalg.norm(np.array(c) - base) for c in owned]
+            keep = np.argsort(dists)[:total_workers]
+            for i in range(len(owned)):
+                if i not in keep: r, c = owned[i]; self.grid[r,c,0] = 0; self.grid[r,c,2] = 0; self.grid[r,c,6] = 0
+            owned = owned[keep]
+        if not len(owned): return True
+        probs = np.ones(len(owned)) / len(owned)
+        rem = total_workers - len(owned)
+        base_c = (0,0) if owner_id == 1 else (self.rows-1, self.cols-1)
+        if rem > 0:
+            alloc = np.random.multinomial(rem, probs)
+            excess = 0
+            for i, (r, c) in enumerate(owned):
+                tot = 1 + alloc[i]
+                if (r, c) != base_c and tot > 50: excess += (tot-50); self.grid[r,c,2] = 50
+                else: self.grid[r,c,2] = tot
+            self.grid[base_c[0], base_c[1], 2] += excess
         else:
-            for r, c in owned_indices:
-                self.grid[r, c, 2] = 1
-        
+            for r, c in owned: self.grid[r, c, 2] = 1
         return False
 
-    def claim_target_tile(self, owner_id: int, target_coords: tuple) -> tuple[bool, bool, int, str, int]:
-        tr, tc = target_coords
-        rows, cols = self.grid.shape[0], self.grid.shape[1]
-        p1_base, p2_base = (0, 0), (rows - 1, cols - 1)
-        enemy_base = p2_base if int(owner_id) == 1 else p1_base
-        
-        if not (0 <= tr < rows and 0 <= tc < cols):
-            return False, False, 0, "out_of_bounds", 0
-        if self.grid[tr, tc, 0] == owner_id:
-            return False, False, 0, "already_owned", 0
+    def claim_target_tile(self, owner_id, target):
+        tr, tc = target
+        if not (0 <= tr < self.rows and 0 <= tc < self.cols) or self.grid[tr, tc, 0] == owner_id or int(self.grid[tr, tc, 0]) != 0: return False, False, 0, "fail", 0
+        if not any(self.grid[nr, nc, 0] == owner_id for nr, nc in self._get_neighbors(tr, tc)): return False, False, 0, "fail", 0
+        attack = sum(self.grid[nr, nc, 2] for nr, nc in self._get_neighbors(tr, tc) if self.grid[nr, nc, 0] == owner_id)
+        if attack > int(self.grid[tr, tc, 2]):
+            self.grid[tr, tc, 0], self.grid[tr, tc, 2] = int(owner_id), 1
+            return True, False, 0, "success", int(self.grid[tr, tc, 2])
+        return False, False, 0, "fail", 0
 
-        # Workers only conquer Neutral
-        target_owner = int(self.grid[tr, tc, 0])
-        if target_owner != 0:
-            return False, False, target_owner, "workers_cannot_attack_occupied", 0
-
-        # Adjacency
-        is_adjacent = False
-        total_attacking_force = 0
-        for nr, nc in self._get_neighbors(tr, tc):
-            if self.grid[nr, nc, 0] == owner_id:
-                is_adjacent = True
-                total_attacking_force += self.grid[nr, nc, 2]
-
-        if not is_adjacent:
-            return False, False, 0, "not_adjacent", 0
-
-        # Battle
-        actual_workers = int(self.grid[tr, tc, 2])
-        if total_attacking_force > actual_workers:
-            base_captured = (tr, tc) == enemy_base
-            self.grid[tr, tc, 0] = int(owner_id)
-            self.grid[tr, tc, 2] = 1 
-            return True, base_captured, target_owner, "success", actual_workers
-        
-        return False, False, target_owner, "insufficient_force", 0
-
-    def get_soldier_count(self, player_id):
-        if player_id == 1: return int(np.sum(self.grid[:, :, 4]))
-        return 0
-
+    def get_soldier_count(self, player_id): return int(np.sum(self.grid[:, :, 4 if player_id == 1 else 5]))
     def remove_soldiers(self, player_id, count):
-        if player_id != 1: return
-        soldier_coords = np.argwhere(self.grid[:, :, 4] > 0)
-        if len(soldier_coords) == 0: return
-        
-        base = np.array([0, 0])
-        soldier_coords = sorted(soldier_coords, key=lambda x: np.linalg.norm(x - base), reverse=True)
-        
-        removed = 0
-        for r, c in soldier_coords:
-            if removed >= count: break
-            on_tile = self.grid[r, c, 4]
-            to_remove = min(on_tile, count - removed)
-            self.grid[r, c, 4] -= to_remove
-            removed += to_remove
+        ch = 4 if player_id == 1 else 5
+        coords = np.argwhere(self.grid[:, :, ch] > 0)
+        if not len(coords): return
+        base = np.array([0,0] if player_id == 1 else [self.rows-1, self.cols-1])
+        coords = sorted(coords, key=lambda x: np.linalg.norm(x - base), reverse=True)
+        rem = 0
+        for r, c in coords:
+            if rem >= count: break
+            take = min(self.grid[r, c, ch], count - rem)
+            self.grid[r, c, ch] -= take; rem += take
 
-    def get_owned_tiles(self, owner_id):
-        return int(np.sum(self.grid[:, :, 0] == owner_id))
-    
-    def get_tile_ownership(self):
-        return self.grid[:, :, 0]
+    def get_owned_tiles(self, owner_id): return int(np.sum(self.grid[:, :, 0] == owner_id))
     
     def full_board_state(self) -> np.ndarray:
-        rows, cols = self.grid.shape[0], self.grid.shape[1]
-        mask = np.zeros((rows, cols), dtype=np.int32)
-        owner_channel = self.grid[:, :, 0]
-        player_tiles = np.argwhere(owner_channel == 1)
-        
-        for r, c in player_tiles:
+        mask = np.zeros((self.rows, self.cols), dtype=np.int32)
+        for r, c in np.argwhere(self.grid[:, :, 0] == 1):
             for nr, nc in self._get_neighbors(r, c):
-                if owner_channel[nr, nc] != 1:
-                    mask[nr, nc] = 1
-
-        core_layers = self.grid[:, :, :3] 
-        resource_layer = self.grid[:, :, 3:4]
-        soldier_layer = self.grid[:, :, 4:]
-        
-        combined = np.concatenate([
-            core_layers, 
-            mask[..., np.newaxis], 
-            resource_layer,
-            soldier_layer
-        ], axis=2)
-        
+                if self.grid[nr, nc, 0] != 1: mask[nr, nc] = 1
+        # 8 channels
+        combined = np.concatenate([self.grid[:, :, :3], mask[..., np.newaxis], self.grid[:, :, 3:]], axis=2)
         return combined.transpose(2, 0, 1).astype(np.int32)
 
-    def get_potencial_trade_routes(self) -> int:
-        return int(self.p1_buildings_manager.get_mine_count(player_id=1)) - len(self.p1_trade_manager.active_routes)
-
     def get_board_state_and_stats(self)-> dict:
-        spatial_board = self.full_board_state() 
-        global_stats = np.array([
-            self.p1_buildings_manager.get_resource_tile_count(player_id=1), 
-            self.p1_buildings_manager.get_mine_count(player_id=1),          
-            self.collect_gold_income(player_id=1),                         
-            self.collect_wood_income(player_id=1),                         
-            len(self.p1_trade_manager.active_routes),                      
-            self.get_owned_tiles(owner_id=1),                              
-            self.get_owned_tiles(owner_id=2),                              
-            self.get_potencial_trade_routes(),                             
-            self.p1_buildings_manager.get_crop_field_count(player_id=1)    
-        ], dtype=np.float32)
-        
-        return {"visual": spatial_board, "stats": global_stats}
+        gs = np.array([self.p1_buildings_manager.get_resource_tile_count(1), self.p1_buildings_manager.get_mine_count(1), self.collect_gold_income(1), self.collect_wood_income(1), len(self.p1_trade_manager.active_routes), self.get_owned_tiles(owner_id=1), self.get_owned_tiles(owner_id=2), (int(self.p1_buildings_manager.get_mine_count(1)) - len(self.p1_trade_manager.active_routes)), self.p1_buildings_manager.get_crop_field_count(1)], dtype=np.float32)
+        return {"visual": self.full_board_state(), "stats": gs}
     
     def get_action_mask(self, player_id):
         mask = np.zeros(self.rows * self.cols, dtype=bool)
-        owned_coords = np.argwhere(self.grid[:, :, 0] == player_id)
-        for r, c in owned_coords:
+        for r, c in np.argwhere(self.grid[:, :, 0] == player_id):
             for nr, nc in self._get_neighbors(r, c):
-                if self.grid[nr, nc, 0] == 0:
-                    mask[nr * self.cols + nc] = True
+                # Allow selecting empty tiles (owner 0) OR enemy tiles (owner 2)
+                if self.grid[nr, nc, 0] in [0, 2]: mask[nr * self.cols + nc] = True
         return mask
 
-    def get_build_mask(self, player_id: int, player_gold: int, player_wood: int) -> np.ndarray:
-        mask = np.zeros(7, dtype=bool)
-        current_mines = self.p1_buildings_manager.get_mine_count(player_id)
-        resource_tiles = self.p1_buildings_manager.get_resource_tile_count(player_id)
-        has_mine_space = np.any((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] == 0) & (self.grid[:, :, 3] > 0))
-        
-        if current_mines < resource_tiles and has_mine_space and player_gold >= 50:
-            mask[0] = True 
-        has_l1_mines = np.any((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] == 1))
-        if has_l1_mines and player_gold >= 100 and player_wood >= 50:
-            mask[1] = True 
-
-        manager = self.p1_trade_manager if player_id == 1 else None 
-        if manager:
-            all_mines = np.argwhere((self.grid[:, :, 0] == player_id) & ((self.grid[:, :, 1] == 1) | (self.grid[:, :, 1] == 4)))
-            eligible_mines = [tuple(pos) for pos in all_mines if tuple(pos) not in manager.active_routes]
-            if len(eligible_mines) > 0:
-                mask[2] = True 
-
-        owned_coords = np.argwhere(self.grid[:, :, 0] == player_id)
-        potential_sites = [tuple(c) for c in owned_coords if self.grid[c[0], c[1], 1] == 0]
-        
-        has_mine_neighbor = False
-        for r, c in potential_sites:
-            for nr, nc in self._get_neighbors(r, c):
-                if self.grid[nr, nc, 1] in [1, 4]: 
-                    has_mine_neighbor = True; break
-            if has_mine_neighbor: break
-        if player_gold >= 30 and player_wood >= 20 and has_mine_neighbor:
-            mask[3] = True 
-
-        has_l1_wh = np.any((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] == 2))
-        if has_l1_wh and player_gold >= 60 and player_wood >= 40:
-            mask[4] = True 
-
-        has_wh_base_neighbor = False
-        for r, c in potential_sites:
-            for nr, nc in self._get_neighbors(r, c):
-                if self.grid[nr, nc, 1] in [2, 3, 6]: 
-                    has_wh_base_neighbor = True; break
-            if has_wh_base_neighbor: break
-        if player_gold >= 20 and player_wood >= 10 and has_wh_base_neighbor:
-            mask[5] = True 
-
-        has_l1_crop = np.any((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] == 5))
-        if has_l1_crop and player_gold >= 40 and player_wood >= 20:
-            mask[6] = True 
+    def get_fortify_target_mask(self, player_id):
+        mask = np.zeros(self.rows * self.cols, dtype=bool)
+        # Any owned tile that is Level 0 or Level 1 is a valid target to select/upgrade
+        for r, c in np.argwhere((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 6] < 2)):
+            mask[r * self.cols + c] = True
         return mask
 
-    def collect_wood_income(self, player_id):
-        owned_mask = (self.grid[:, :, 0] == player_id)
-        return int(np.sum(self.grid[owned_mask, 3]))
+    def get_build_mask(self, player_id, player_gold, player_wood, pending_fortify_tile=None):
+        mask = np.zeros(8, dtype=bool)
+        m_cnt = self.p1_buildings_manager.get_mine_count(player_id)
+        res = self.p1_buildings_manager.get_resource_tile_count(player_id)
+        space = np.any((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] == 0) & (self.grid[:, :, 3] > 0))
+        if m_cnt < res and space and player_gold >= 50: mask[0] = True 
+        if np.any((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] == 1)) and player_gold >= 100 and player_wood >= 50: mask[1] = True 
+        if self.p1_trade_manager:
+            mines = np.argwhere((self.grid[:, :, 0] == player_id) & ((self.grid[:, :, 1] == 1) | (self.grid[:, :, 1] == 4)))
+            if any(tuple(pos) not in self.p1_trade_manager.active_routes for pos in mines): mask[2] = True 
+        owned = np.argwhere(self.grid[:, :, 0] == player_id)
+        sites = [tuple(c) for c in owned if self.grid[c[0], c[1], 1] == 0]
+        has_m = any(any(self.grid[nr, nc, 1] in [1, 4] for nr, nc in self._get_neighbors(r, c)) for r, c in sites)
+        if player_gold >= 30 and player_wood >= 20 and has_m: mask[3] = True 
+        if np.any((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] == 2)) and player_gold >= 60 and player_wood >= 40: mask[4] = True 
+        has_wb = any(any(self.grid[nr, nc, 1] in [2, 3, 6] for nr, nc in self._get_neighbors(r, c)) for r, c in sites)
+        if player_gold >= 20 and player_wood >= 10 and has_wb: mask[5] = True 
+        if np.any((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 1] == 5)) and player_gold >= 40 and player_wood >= 20: mask[6] = True 
+        
+        # Fortify: only if we have a pending target and it's still valid
+        if player_gold >= 50 and player_wood >= 50:
+            if pending_fortify_tile is not None:
+                r, c = pending_fortify_tile
+                if self.grid[r, c, 0] == player_id and self.grid[r, c, 6] < 2:
+                    mask[7] = True
+            else:
+                # Fallback if no pending (though the agent should pick one)
+                if np.any((self.grid[:, :, 0] == player_id) & (self.grid[:, :, 6] < 2)):
+                    mask[7] = True
+        return mask
 
-    def collect_food_income(self, player_id):
-        return self.p1_buildings_manager.get_building_count_by_type(player_id, 5) * 10 + \
-               self.p1_buildings_manager.get_building_count_by_type(player_id, 7) * 20
-
-    def create_trade_route(self, player_id: int) -> tuple[bool, str]:
-        manager = self.p1_trade_manager if player_id == 1 else None
-        manager.validate_routes(self.grid, player_id)
-        all_mines = np.argwhere((self.grid[:, :, 0] == player_id) & ((self.grid[:, :, 1] == 1) | (self.grid[:, :, 1] == 4)))
-        eligible_mines = [tuple(pos) for pos in all_mines if tuple(pos) not in manager.active_routes]
-        if not eligible_mines: return False, "no_mines"
-        base_r, base_c = manager.base_coords
-        furthest = max(eligible_mines, key=lambda p: abs(p[0]-base_r) + abs(p[1]-base_c))
-        if manager.create_route(furthest): return True, "success"
-        return False, "fail"
-
+    def collect_wood_income(self, player_id): return int(np.sum(self.grid[self.grid[:, :, 0] == player_id, 3]))
+    def collect_food_income(self, player_id): return self.p1_buildings_manager.get_building_count_by_type(player_id, 5) * 10 + self.p1_buildings_manager.get_building_count_by_type(player_id, 7) * 20
+    def create_trade_route(self, player_id):
+        self.p1_trade_manager.validate_routes(self.grid, player_id)
+        mines = np.argwhere((self.grid[:, :, 0] == player_id) & ((self.grid[:, :, 1] == 1) | (self.grid[:, :, 1] == 4)))
+        eligible = [tuple(pos) for pos in mines if tuple(pos) not in self.p1_trade_manager.active_routes]
+        if not eligible: return False, "none"
+        base = self.p1_trade_manager.base_coords
+        best = max(eligible, key=lambda p: abs(p[0]-base[0]) + abs(p[1]-base[1]))
+        return self.p1_trade_manager.create_route(best), "success"
     def collect_gold_income(self, player_id):
-        manager = self.p1_trade_manager if player_id == 1 else None
-        if not manager: return 0.0
-        manager.validate_routes(self.grid, player_id) 
-        return float(manager.calculate_income(self.grid) * 2)
+        if not self.p1_trade_manager: return 0.0
+        self.p1_trade_manager.validate_routes(self.grid, player_id) 
+        return float(self.p1_trade_manager.calculate_income(self.grid) * 2)
+
+    def _generate_resources(self):
+        for r in range(self.rows):
+            for c in range(self.cols): self.grid[r, c, 3] = np.random.randint(5, 11) if np.random.random() > 0.9 else 0

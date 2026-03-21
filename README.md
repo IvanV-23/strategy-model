@@ -9,7 +9,9 @@ A custom **Gymnasium** environment and **PyTorch** implementation of a strategic
 * **Custom Environment:** A multi-layered `StrategyEnv` built on Gymnasium standards involving diplomacy, economy, and board conquest.
 * **Dual-Head Architecture:** Uses a Multi-Head Neural Network to handle separate action branches for **Diplomacy** (Move, Build, Attack) and **Economy** (Gather, Create Units).
 * **Grid-Based Expansion:** A neighbor-aware territory mechanic where winning battles allows the player to capture adjacent tiles and eventually the enemy base.
-* **Real-time Visualization:** Pygame-based renderer showing territory control (Blue vs. Red), resource counts, and unit buildings.
+* **Multi-Agent Learning:** Supports Multi-Agent Reinforcement Learning (MARL) with shared critics.
+* **C++ Renderer:** High-performance C++ rendering engine for real-time visualization.
+* **Trained Models:** Pre-trained model checkpoints available (trained_model.pth, soldier_agent_trained.pth, marl_strategy_optimized.pth).
 
 ---
 
@@ -42,11 +44,28 @@ The agent chooses two actions per turn (Multi-Discrete):
 ## 📂 Project Structure
 
 ```text
-├── main.py              # Training loop and entry point
-├── visualization.py     # Pygame rendering engine and UI
-├── environment/
-│   ├── strategy_env.py  # Top-level Gymnasium wrapper
-│   ├── board_env.py     # Grid logic and territory flood-fill
-│   └── player_env.py    # Resource management and combat logic
-└── models/
-    └── agent.py         # PyTorch Policy/Value neural network
+├── scripts/
+│   ├── train.py           # Standard training loop
+│   ├── train_marl.py      # Multi-Agent RL training
+│   ├── visualize.py       # Python visualization
+│   └── visualize_marl.py  # MARL visualization
+├── enviroment/
+│   ├── strategy_env.py    # Top-level Gymnasium wrapper
+│   ├── reward_env.py      # Reward shaping
+│   ├── enviroment_blocks/ # Block-based environment
+│   ├── enviroment_branches/ # Branched action space
+│   ├── buildings/         # Building mechanics
+│   └── enviroment_render/ # Python renderer
+├── models/
+│   ├── actor_critic.py    # Actor-Critic network
+│   ├── marl_critic.py     # Multi-Agent critic
+│   ├── agents/           # Agent implementations
+│   └── heads/            # Policy/value heads
+├── cpp_render/           # C++ rendering engine
+│   ├── main.cpp          # C++ renderer
+│   ├── include/          # Headers
+│   └── CMakeLists.txt    # Build config
+├── trained_model.pth              # Standard trained model
+├── soldier_agent_trained.pth      # Soldier agent model
+└── marl_strategy_optimized.pth     # MARL optimized model
+```
