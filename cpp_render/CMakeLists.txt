@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(SDL2 CONFIG REQUIRED)
 find_package(SDL2_ttf CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(pybind11 CONFIG REQUIRED)
 
 # --- Include Directories ---
 include_directories(include)
@@ -48,6 +49,19 @@ target_link_libraries(strategy_renderer PRIVATE
 if(WIN32)
     target_link_libraries(strategy_renderer PRIVATE ws2_32)
 endif()
+
+# --- Python Bindings (pybind11 module) ---
+set(PYTHON_BINDINGS_SOURCES
+    src/python_bindings.cpp
+    src/board_factory.cpp
+    src/resource_system.cpp
+    src/build_system.cpp
+    src/combat_system.cpp
+    src/turn_manager.cpp
+)
+
+pybind11_add_module(strategy_engine ${PYTHON_BINDINGS_SOURCES})
+target_link_libraries(strategy_engine PRIVATE nlohmann_json::nlohmann_json)
 
 # --- Testing ---
 include(FetchContent)
