@@ -59,11 +59,15 @@ public:
     }
 
     void render() {
-        json state = global_state.get_data();
-        if (state.is_null()) return;
-
         SDL_SetRenderDrawColor(renderer, 15, 15, 20, 255);
         SDL_RenderClear(renderer);
+
+        json state = global_state.get_data();
+        if (state.is_null()) {
+            draw_text("Waiting for connection on port 8080...", width / 2 - 150, height / 2, {100, 100, 120, 255});
+            SDL_RenderPresent(renderer);
+            return;
+        }
 
         if (state.contains("board")) {
             const auto& board = state["board"];
@@ -156,17 +160,17 @@ private:
     TowerRenderer tower_renderer;
     UnitRenderer unit_renderer;
 
-    void draw_ui(const json& state) {
-        auto draw_text = [&](const std::string& text, int x, int y, SDL_Color col) {
-            if (!font) return;
-            SDL_Surface* s = TTF_RenderText_Blended(font, text.c_str(), col);
-            SDL_Texture* t = SDL_CreateTextureFromSurface(renderer, s);
-            SDL_Rect dst = {x, y, s->w, s->h};
-            SDL_RenderCopy(renderer, t, NULL, &dst);
-            SDL_FreeSurface(s);
-            SDL_DestroyTexture(t);
-        };
+    void draw_text(const std::string& text, int x, int y, SDL_Color col) {
+        if (!font) return;
+        SDL_Surface* s = TTF_RenderText_Blended(font, text.c_str(), col);
+        SDL_Texture* t = SDL_CreateTextureFromSurface(renderer, s);
+        SDL_Rect dst = {x, y, s->w, s->h};
+        SDL_RenderCopy(renderer, t, NULL, &dst);
+        SDL_FreeSurface(s);
+        SDL_DestroyTexture(t);
+    }
 
+    void draw_ui(const json& state) {
         SDL_Rect ui_bg = {0, 0, width, 60};
         SDL_SetRenderDrawColor(renderer, 30, 30, 40, 200);
         SDL_RenderFillRect(renderer, &ui_bg);
