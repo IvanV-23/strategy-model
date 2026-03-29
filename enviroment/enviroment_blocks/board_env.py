@@ -9,15 +9,15 @@ class BoardEnv:
     def __init__(self, rows=16, cols=16):
         self.rows = rows
         self.cols = cols
-        # 0: Owner, 1: Status, 2: Workers, 3: Wood, 4: P1 Sol, 5: P2 Sol, 6: Fort
-        self.grid = np.zeros((rows, cols, 7), dtype=np.int32)
+        # 0: Owner, 1: Status, 2: Workers, 3: Wood, 4: P1 Sol, 5: P2 Sol, 6: Fort, 7: TileType
+        self.grid = np.zeros((rows, cols, 8), dtype=np.int32)
         self.p1_trade_manager = TradeRouteManager(base_coords=(0, 0))
         self.p1_buildings_manager = BuildingsManager(self.grid, rows, cols)
         self.lost_soldiers_combat = 0
 
     def reset(self):
         resource_layer = self.grid[:, :, 3].copy() 
-        self.grid = np.zeros((self.rows, self.cols, 7), dtype=np.int32)
+        self.grid = np.zeros((self.rows, self.cols, 8), dtype=np.int32)
         self.grid[:, :, 3] = resource_layer
         self.grid[0, 0, :3] = [1, 3, 10]
         self.grid[0, 0, 6] = 2 # Default Fortification Level 2
@@ -36,7 +36,7 @@ class BoardEnv:
                 if (r, c) == (0, 0) or (r, c) == (self.rows-1, self.cols-1):
                     continue
                 if np.random.random() < water_chance:
-                    self.grid[r, c, 1] = 8
+                    self.grid[r, c, 7] = 1  # tile_type = Water
 
     def update_board(self):
         self.p1_buildings_manager.update_board(self.grid, self.rows, self.cols)
@@ -287,7 +287,7 @@ class BoardEnv:
         return shot_events
 
     def get_tile_data(self):
-        return [[{"owner": int(self.grid[r,c,0]), "status": int(self.grid[r,c,1]), "workers": float(self.grid[r,c,2]), "wood": int(self.grid[r,c,3]), "soldiers": int(self.grid[r,c,4]), "p2_soldiers": int(self.grid[r,c,5]), "fortified": int(self.grid[r,c,6])} for c in range(self.cols)] for r in range(self.rows)]
+        return [[{"owner": int(self.grid[r,c,0]), "status": int(self.grid[r,c,1]), "workers": float(self.grid[r,c,2]), "wood": int(self.grid[r,c,3]), "soldiers": int(self.grid[r,c,4]), "p2_soldiers": int(self.grid[r,c,5]), "fortified": int(self.grid[r,c,6]), "tile_type": int(self.grid[r,c,7])} for c in range(self.cols)] for r in range(self.rows)]
 
     def _get_neighbors(self, r, c):
         res = []
@@ -371,8 +371,7 @@ class BoardEnv:
         for r, c in np.argwhere(self.grid[:, :, 0] == 1):
             for nr, nc in self._get_neighbors(r, c):
                 if self.grid[nr, nc, 0] != 1: mask[nr, nc] = 1
-        # 8 channels
-        combined = np.concatenate([self.grid[:, :, :3], mask[..., np.newaxis], self.grid[:, :, 3:]], axis=2)
+        combined = np.concatenate([self.grid[:, :, :3], mask[..., np.newaxis], self.grid[:, :, 3:7]], axis=2)
         return combined.transpose(2, 0, 1).astype(np.int32)
 
     def get_board_state_and_stats(self)-> dict:

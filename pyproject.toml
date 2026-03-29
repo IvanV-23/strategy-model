@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=45", "cmake>=3.10", "pybind11>=2.10.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "strategy_engine"
+version = "1.0.0"
+description = "C++ Strategy Game Engine Python Bindings"
+requires-python = ">=3.8"
+
+[tool.setuptools]
+package-dir = {"" = "cpp_render"}
+
+[tool.setuptools.packages.find]
+where = ["cpp_render"]
+patterns = ["*.cpp", "include/*.hpp"]

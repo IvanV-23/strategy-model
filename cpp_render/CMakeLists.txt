@@ -10,6 +10,19 @@ find_package(SDL2_ttf CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(pybind11 CONFIG REQUIRED)
 
+# --- Optional LibTorch for AI inference ---
+# Set CMAKE_PREFIX_PATH to your LibTorch installation:
+#   - Windows: C:/path/to/libtorch
+#   - Or use vcpkg: -DCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake
+find_package(Torch QUIET)
+if(Torch_FOUND)
+    message(STATUS "LibTorch found - AI inference enabled")
+    set(LIBTORCH_AVAILABLE ON)
+else()
+    message(STATUS "LibTorch not found - building without AI inference")
+    set(LIBTORCH_AVAILABLE OFF)
+endif()
+
 # --- Include Directories ---
 include_directories(include)
 
@@ -48,6 +61,48 @@ target_link_libraries(strategy_renderer PRIVATE
 
 if(WIN32)
     target_link_libraries(strategy_renderer PRIVATE ws2_32)
+endif()
+
+# --- Standalone AI Game (requires LibTorch) ---
+if(LIBTORCH_AVAILABLE)
+    set(AI_SOURCES
+        src/main_standalone.cpp
+        src/camera.cpp
+        src/graphics_utils.cpp
+        src/board_factory.cpp
+        src/resource_system.cpp
+        src/build_system.cpp
+        src/combat_system.cpp
+        src/turn_manager.cpp
+        src/inference_engine.cpp
+        src/renderers/tile_renderer.cpp
+        src/renderers/building_renderer.cpp
+        src/renderers/tower_renderer.cpp
+        src/renderers/warehouse_renderer.cpp
+        src/renderers/crop_renderer.cpp
+        src/renderers/sawmill_renderer.cpp
+        src/renderers/tree_renderer.cpp
+        src/renderers/wall_renderer.cpp
+        src/renderers/unit_renderer.cpp
+    )
+    
+    add_executable(strategy_game ${AI_SOURCES})
+    target_link_libraries(strategy_game PRIVATE 
+        SDL2::SDL2 
+        SDL2::SDL2main
+        SDL2_ttf::SDL2_ttf 
+        nlohmann_json::nlohmann_json
+        Torch::Torch
+        torch
+    )
+    target_include_directories(strategy_game PRIVATE ${TORCH_INCLUDE_DIRS})
+    set_property(TARGET strategy_game PROPERTY CXX_STANDARD 17)
+    
+    if(WIN32)
+        target_link_libraries(strategy_game PRIVATE ws2_32)
+    endif()
+    
+    message(STATUS "Created 'strategy_game' target with AI inference support")
 endif()
 
 # --- Python Bindings (pybind11 module) ---

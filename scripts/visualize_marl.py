@@ -14,6 +14,12 @@ from models.marl_critic import MARL_Strategy, SoldierAgent
 
 def visualize_marl_agent():
     # 1. Environment Setup
+    use_cpp = os.getenv("USE_CPP_RENDER") == "1"
+    
+    if use_cpp:
+        # Set environment variable for C++ rendering (C++ renderer runs as subprocess)
+        os.environ["USE_CPP_RENDER"] = "1"
+    
     env = StrategyEnv(render_mode="human")
 
     # 2. Model Initialization
@@ -43,8 +49,7 @@ def visualize_marl_agent():
     current_goal = torch.zeros((1, 16))
     running = True
     
-    use_cpp = os.getenv("USE_CPP_RENDER") == "1"
-    print("Starting HRL visualization loop.")
+    print(f"Starting HRL visualization loop. Use C++ renderer: {use_cpp}")
 
     while running:
         if not use_cpp:

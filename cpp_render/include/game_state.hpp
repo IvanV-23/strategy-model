@@ -7,6 +7,11 @@
 
 using json = nlohmann::json;
 
+enum class TileType {
+    Normal = 0,
+    Water = 1
+};
+
 enum class TileStatus {
     Empty = 0,
     Sawmill = 1,
@@ -15,13 +20,13 @@ enum class TileStatus {
     Sawmill_P2 = 4,
     Crops = 5,
     Warehouse_P2 = 6,
-    Crops_P2 = 7,
-    Water = 8
+    Crops_P2 = 7
 };
 
 struct Tile {
     int owner = 0;
     TileStatus status = TileStatus::Empty;
+    TileType tile_type = TileType::Normal;
     int wood = 0;
     int fortified = 0;
     int soldiers = 0;
@@ -58,6 +63,7 @@ struct GameState {
                     Tile tile;
                     tile.owner = tile_json.value("owner", 0);
                     tile.status = static_cast<TileStatus>(tile_json.value("status", 0));
+                    tile.tile_type = static_cast<TileType>(tile_json.value("tile_type", 0));
                     tile.wood = tile_json.value("wood", 0);
                     tile.fortified = tile_json.value("fortified", 0);
                     tile.soldiers = tile_json.value("soldiers", 0);
