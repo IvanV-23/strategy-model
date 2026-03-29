@@ -124,7 +124,10 @@ class StrategyRenderer:
                 color = self.COLORS["bg"]
                 if board_data:
                     tile = board_data[r][c]
-                    if tile["owner"] == 1: color = (30, 60, 120)
+                    tile_type = tile.get("tile_type", 0)
+                    if tile_type == 1:  # Water
+                        color = (50, 100, 200)
+                    elif tile["owner"] == 1: color = (30, 60, 120)
                     elif tile["owner"] == 2: color = (100, 30, 30)
                 pygame.draw.rect(self.screen, color, rect)
 

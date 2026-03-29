@@ -9,3 +9,4 @@ setup.bat
 mlflow.db
 
 cpp_render/build/
+cpp_render/build_python/

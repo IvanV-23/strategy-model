@@ -1,10 +1,27 @@
 cmake_minimum_required(VERSION 3.10)
 project(StrategyRenderer)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 # --- Dependencies via vcpkg ---
 find_package(SDL2 CONFIG REQUIRED)
 find_package(SDL2_ttf CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(pybind11 CONFIG REQUIRED)
+
+# --- Optional LibTorch for AI inference ---
+# Set CMAKE_PREFIX_PATH to your LibTorch installation:
+#   - Windows: C:/path/to/libtorch
+#   - Or use vcpkg: -DCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake
+find_package(Torch QUIET)
+if(Torch_FOUND)
+    message(STATUS "LibTorch found - AI inference enabled")
+    set(LIBTORCH_AVAILABLE ON)
+else()
+    message(STATUS "LibTorch not found - building without AI inference")
+    set(LIBTORCH_AVAILABLE OFF)
+endif()
 
 # --- Include Directories ---
 include_directories(include)
@@ -15,6 +32,11 @@ set(SOURCES
     src/camera.cpp
     src/graphics_utils.cpp
     src/network.cpp
+    src/board_factory.cpp
+    src/resource_system.cpp
+    src/build_system.cpp
+    src/combat_system.cpp
+    src/turn_manager.cpp
     src/renderers/tile_renderer.cpp
     src/renderers/building_renderer.cpp
     src/renderers/tower_renderer.cpp
@@ -41,6 +63,61 @@ if(WIN32)
     target_link_libraries(strategy_renderer PRIVATE ws2_32)
 endif()
 
+# --- Standalone AI Game (requires LibTorch) ---
+if(LIBTORCH_AVAILABLE)
+    set(AI_SOURCES
+        src/main_standalone.cpp
+        src/camera.cpp
+        src/graphics_utils.cpp
+        src/board_factory.cpp
+        src/resource_system.cpp
+        src/build_system.cpp
+        src/combat_system.cpp
+        src/turn_manager.cpp
+        src/inference_engine.cpp
+        src/renderers/tile_renderer.cpp
+        src/renderers/building_renderer.cpp
+        src/renderers/tower_renderer.cpp
+        src/renderers/warehouse_renderer.cpp
+        src/renderers/crop_renderer.cpp
+        src/renderers/sawmill_renderer.cpp
+        src/renderers/tree_renderer.cpp
+        src/renderers/wall_renderer.cpp
+        src/renderers/unit_renderer.cpp
+    )
+    
+    add_executable(strategy_game ${AI_SOURCES})
+    target_link_libraries(strategy_game PRIVATE 
+        SDL2::SDL2 
+        SDL2::SDL2main
+        SDL2_ttf::SDL2_ttf 
+        nlohmann_json::nlohmann_json
+        Torch::Torch
+        torch
+    )
+    target_include_directories(strategy_game PRIVATE ${TORCH_INCLUDE_DIRS})
+    set_property(TARGET strategy_game PROPERTY CXX_STANDARD 17)
+    
+    if(WIN32)
+        target_link_libraries(strategy_game PRIVATE ws2_32)
+    endif()
+    
+    message(STATUS "Created 'strategy_game' target with AI inference support")
+endif()
+
+# --- Python Bindings (pybind11 module) ---
+set(PYTHON_BINDINGS_SOURCES
+    src/python_bindings.cpp
+    src/board_factory.cpp
+    src/resource_system.cpp
+    src/build_system.cpp
+    src/combat_system.cpp
+    src/turn_manager.cpp
+)
+
+pybind11_add_module(strategy_engine ${PYTHON_BINDINGS_SOURCES})
+target_link_libraries(strategy_engine PRIVATE nlohmann_json::nlohmann_json)
+
 # --- Testing ---
 include(FetchContent)
 FetchContent_Declare(
@@ -58,3 +135,39 @@ target_include_directories(test_camera PRIVATE include)
 target_link_libraries(test_camera GTest::gtest GTest::gtest_main)
 
 add_test(NAME CameraTest COMMAND test_camera)
+
+add_executable(test_game_state tests/test_game_state.cpp)
+target_include_directories(test_game_state PRIVATE include)
+target_link_libraries(test_game_state GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+
+add_test(NAME GameStateTest COMMAND test_game_state)
+
+add_executable(test_board_factory tests/test_board_factory.cpp src/board_factory.cpp)
+target_include_directories(test_board_factory PRIVATE include)
+target_link_libraries(test_board_factory GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+
+add_test(NAME BoardFactoryTest COMMAND test_board_factory)
+
+add_executable(test_resource_system tests/test_resource_system.cpp src/resource_system.cpp src/board_factory.cpp)
+target_include_directories(test_resource_system PRIVATE include)
+target_link_libraries(test_resource_system GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+
+add_test(NAME ResourceSystemTest COMMAND test_resource_system)
+
+add_executable(test_build_system tests/test_build_system.cpp src/build_system.cpp src/resource_system.cpp src/board_factory.cpp)
+target_include_directories(test_build_system PRIVATE include)
+target_link_libraries(test_build_system GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+
+add_test(NAME BuildSystemTest COMMAND test_build_system)
+
+add_executable(test_combat_system tests/test_combat_system.cpp src/combat_system.cpp src/board_factory.cpp)
+target_include_directories(test_combat_system PRIVATE include)
+target_link_libraries(test_combat_system GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+
+add_test(NAME CombatSystemTest COMMAND test_combat_system)
+
+add_executable(test_turn_manager tests/test_turn_manager.cpp src/turn_manager.cpp src/resource_system.cpp src/build_system.cpp src/combat_system.cpp src/board_factory.cpp)
+target_include_directories(test_turn_manager PRIVATE include)
+target_link_libraries(test_turn_manager GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+
+add_test(NAME TurnManagerTest COMMAND test_turn_manager)
